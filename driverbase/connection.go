@@ -1,3 +1,8 @@
+// Copyright (c) 2025 Columnar Technologies.  All rights reserved.
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -681,7 +686,9 @@ CATALOGLOOP:
 				return nil, err
 			}
 		case err := <-errCh:
-			return nil, err
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
