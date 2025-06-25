@@ -58,13 +58,13 @@ var traceExporterNames = map[string]traceExporterType{
 	string(adbc.TelemetryExporterAdbcFile): TraceExporterAdbcFile,
 }
 
-func (te traceExporterType) String() string {
+func (exporter traceExporterType) String() string {
 	return [...]string{
 		string(adbc.TelemetryExporterNone),
 		string(adbc.TelemetryExporterOtlp),
 		string(adbc.TelemetryExporterConsole),
 		string(adbc.TelemetryExporterAdbcFile),
-	}[te]
+	}[exporter]
 }
 
 const (
@@ -320,8 +320,8 @@ func newTracer(
 }
 
 func tryParseTraceExporterType(value string) (traceExporterType, bool) {
-	if te, ok := traceExporterNames[value]; ok {
-		return te, true
+	if exporter, ok := traceExporterNames[value]; ok {
+		return exporter, true
 	}
 	return TraceExporterNone, false
 }
