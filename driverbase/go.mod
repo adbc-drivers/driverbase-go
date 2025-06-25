@@ -1,13 +1,25 @@
-// Copyright (c) 2025 Columnar Technologies.  All rights reserved.
+// Copyright (c) 2025 Columnar Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-module github.com/columnar-tech/drivers/driverbase
+module github.com/adbc-drivers/driverbase/driverbase
 
 go 1.24.3
 
 require (
+	github.com/adbc-drivers/driverbase/testutil v0.0.0-00010101000000-000000000000
 	github.com/apache/arrow-adbc/go/adbc v0.0.0-20250527060002-0276f2a4372a
 	github.com/apache/arrow-go/v18 v18.3.0
-	github.com/columnar-tech/drivers/testutil v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.10.0
 	go.opentelemetry.io/otel v1.36.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.36.0
@@ -58,4 +70,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/columnar-tech/drivers/testutil => ../testutil
+replace github.com/adbc-drivers/driverbase/testutil => ../testutil

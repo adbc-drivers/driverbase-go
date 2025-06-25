@@ -20,7 +20,7 @@ package driverbase_test
 import (
 	"testing"
 
-	"github.com/columnar-tech/drivers/driverbase"
+	"github.com/adbc-drivers/driverbase/driverbase"
 	"github.com/stretchr/testify/require"
 )
 
