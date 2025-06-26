@@ -20,8 +20,8 @@ package driverbase_test
 import (
 	"testing"
 
-	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/adbc-drivers/driverbase/driverbase"
+	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/stretchr/testify/require"
 )
 
