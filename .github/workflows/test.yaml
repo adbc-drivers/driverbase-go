@@ -1,0 +1,72 @@
+# Copyright (c) 2025 Columnar Technologies, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Build & Test
+
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: "Build and Test/${{ matrix.os }} ${{ matrix.arch }}"
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: Linux, arch: amd64, runner: ubuntu-latest }
+          - { os: macOS, arch: arm64v8, runner: macos-latest }
+          - { os: Windows, arch: amd64, runner: windows-latest }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          cache-dependency-path: driverbase/go.sum
+          check-latest: true
+          go-version: "stable"
+
+      - name: Build driverbase
+        working-directory: driverbase
+        run: |
+          go build ./...
+
+      - name: Build testutil
+        working-directory: testutil
+        run: |
+          go build ./...
+
+      - name: Test driverbase
+        working-directory: driverbase
+        run: |
+          go test ./...
+
+      - name: Test testutil
+        working-directory: testutil
+        run: |
+          go test ./...
