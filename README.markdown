@@ -17,7 +17,7 @@
 # Go Framework for Apache Arrow ADBC Drivers
 
 This is a framework for developing ADBC drivers in Go.  It is forked from the
-(internal and hence inacecssible) framework upstream in
+(internal and hence inaccessible) framework upstream in
 [apache/arrow-adbc](https://github.com/apache/arrow-adbc/).
 
 `driverbase` contains the framework.  `testutil` contains some common helpers

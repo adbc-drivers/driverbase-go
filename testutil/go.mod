@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-module github.com/adbc-drivers/driverbase/testutil
+module github.com/adbc-drivers/driverbase-go/testutil
 
 go 1.24.3
 
