@@ -19,7 +19,7 @@ go 1.24.3
 require (
 	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-00010101000000-000000000000
 	github.com/apache/arrow-adbc/go/adbc v0.0.0-20250527060002-0276f2a4372a
-	github.com/apache/arrow-go/v18 v18.3.0
+	github.com/apache/arrow-go/v18 v18.3.1
 	github.com/stretchr/testify v1.10.0
 	go.opentelemetry.io/otel v1.36.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.36.0
