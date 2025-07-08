@@ -43,6 +43,10 @@ type BulkIngestOptions struct {
 	// The table to ingest data into.
 	// TODO(lidavidm): support schema, catalog
 	TableName string
+	// If true, use a temporary table.  The catalog/schema, if specified,
+	// will be ignored (as temporary tables generally get implemented via
+	// a special catalog/schema).
+	Temporary bool
 	// The ingest mode.
 	Mode string
 	// How far to read ahead on the data source
