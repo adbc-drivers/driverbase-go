@@ -41,8 +41,9 @@ type WriterProps struct {
 
 type BulkIngestOptions struct {
 	// The table to ingest data into.
-	// TODO(lidavidm): support schema, catalog
-	TableName string
+	TableName   string
+	SchemaName  string
+	CatalogName string
 	// If true, use a temporary table.  The catalog/schema, if specified,
 	// will be ignored (as temporary tables generally get implemented via
 	// a special catalog/schema).
@@ -157,6 +158,11 @@ func (bi *BulkIngestManager) Init() error {
 		}
 	} else if bi.Options.Mode == "" {
 		bi.Options.Mode = adbc.OptionValueIngestModeCreate
+	} else if bi.Options.Temporary && (bi.Options.CatalogName != "" || bi.Options.SchemaName != "") {
+		return adbc.Error{
+			Msg:  "[redshift] Cannot specify catalog/schema name and temporary table",
+			Code: adbc.StatusInvalidState,
+		}
 	}
 
 	return nil
