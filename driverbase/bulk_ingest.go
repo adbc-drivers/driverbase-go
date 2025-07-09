@@ -148,19 +148,19 @@ func (bi *BulkIngestManager) Close() {
 func (bi *BulkIngestManager) Init() error {
 	if bi.Options.TableName == "" {
 		return adbc.Error{
-			Msg:  fmt.Sprintf("[redshift] Must set %s to ingest data", adbc.OptionKeyIngestTargetTable),
+			Msg:  fmt.Sprintf("[%s] Must set %s to ingest data", bi.DriverName, adbc.OptionKeyIngestTargetTable),
 			Code: adbc.StatusInvalidState,
 		}
 	} else if bi.Data == nil {
 		return adbc.Error{
-			Msg:  "[redshift] Must bind data to ingest",
+			Msg:  fmt.Sprintf("[%s] Must bind data to ingest", bi.DriverName),
 			Code: adbc.StatusInvalidState,
 		}
 	} else if bi.Options.Mode == "" {
 		bi.Options.Mode = adbc.OptionValueIngestModeCreate
 	} else if bi.Options.Temporary && (bi.Options.CatalogName != "" || bi.Options.SchemaName != "") {
 		return adbc.Error{
-			Msg:  "[redshift] Cannot specify catalog/schema name and temporary table",
+			Msg:  fmt.Sprintf("[%s] Cannot specify catalog/schema name and temporary table", bi.DriverName),
 			Code: adbc.StatusInvalidState,
 		}
 	}
