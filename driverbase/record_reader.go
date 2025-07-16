@@ -29,10 +29,18 @@ import (
 // driverbase can pivot this into an array.RecordReader.
 type RecordReaderImpl interface {
 	io.Closer
-	NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error)
-	BeginAppending(builder *array.RecordBuilder) error
-	// Return io.EOF if no more rows can be appended from the current result set
+	// AppendRow adds a row of the current result set to the record
+	// builder. Return io.EOF if no more rows can be appended from the
+	// current result set.
 	AppendRow(builder *array.RecordBuilder) error
+	// BeginAppending is called exactly once before the first call to
+	// AppendRow. The implementation can do any necessary initialization
+	// here. It will be called after the first call to NextResultSet.
+	BeginAppending(builder *array.RecordBuilder) error
+	// NextResultSet closes the current result set and opens the next
+	// result set for the given parameters. If there are no parameters, it
+	// will be called exactly once with rec == nil.
+	NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error)
 }
 
 // BaseRecordReader is an array.RecordReader based on a row-wise interface.
@@ -47,6 +55,7 @@ type BaseRecordReader struct {
 	// rows in a batch to target
 	batchSize int64
 	impl      RecordReaderImpl
+	schema    *arrow.Schema
 	builder   *array.RecordBuilder
 
 	// The next record to be yielded
@@ -68,6 +77,8 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 		return errors.New("driverbase: BaseRecordReader: must provide ctx")
 	} else if alloc == nil {
 		return errors.New("driverbase: BaseRecordReader: must provide alloc")
+	} else if impl == nil {
+		return errors.New("driverbase: BaseRecordReader: must provide impl")
 	} else if batchSize == 0 {
 		batchSize = 65536
 	} else if batchSize < 0 {
@@ -81,7 +92,6 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 	rr.impl = impl
 
 	// Initialize the builder and get the first result set
-	var schema *arrow.Schema
 	if rr.params != nil {
 		if !rr.advanceParams() {
 			rr.Close()
@@ -93,19 +103,18 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 
 			// TODO(lidavidm): in theory we could still infer the
 			// result set schema
-			schema = arrow.NewSchema([]arrow.Field{}, nil)
+			rr.schema = arrow.NewSchema([]arrow.Field{}, nil)
+			return nil
 		}
 	}
-	if schema == nil {
-		schema, err = rr.impl.NextResultSet(rr.ctx, rr.paramRecord, rr.paramIndex)
-		if err != nil {
-			rr.err = err
-			rr.Close()
-			return err
-		}
+	rr.schema, err = rr.impl.NextResultSet(rr.ctx, rr.paramRecord, rr.paramIndex)
+	if err != nil {
+		rr.err = err
+		rr.Close()
+		return err
 	}
 
-	rr.builder = array.NewRecordBuilder(rr.alloc, schema)
+	rr.builder = array.NewRecordBuilder(rr.alloc, rr.schema)
 	return rr.impl.BeginAppending(rr.builder)
 }
 
@@ -172,6 +181,7 @@ func (rr *BaseRecordReader) Next() bool {
 			_, err = rr.impl.NextResultSet(rr.ctx, rr.paramRecord, rr.paramIndex)
 			if err != nil {
 				rr.err = err
+				// TODO: close here?
 				return false
 			}
 			// TODO(lidavidm): validate that the schema from
@@ -179,6 +189,7 @@ func (rr *BaseRecordReader) Next() bool {
 			continue
 		} else if err != nil {
 			rr.err = err
+			// TODO: close here?
 			return false
 		}
 		rows++
@@ -215,9 +226,11 @@ func (rr *BaseRecordReader) advanceParams() bool {
 }
 
 func (rr *BaseRecordReader) Release() {
-	if atomic.AddInt64(&rr.refCount, -1) == 0 {
+	newCount := atomic.AddInt64(&rr.refCount, -1)
+	if newCount == 0 {
 		rr.Close()
 	}
+	DebugAssert(newCount >= 0, "refCount went negative in BaseRecordReader")
 }
 
 func (rr *BaseRecordReader) Retain() {
@@ -225,7 +238,7 @@ func (rr *BaseRecordReader) Retain() {
 }
 
 func (rr *BaseRecordReader) Schema() *arrow.Schema {
-	return rr.builder.Schema()
+	return rr.schema
 }
 
 func (rr *BaseRecordReader) Record() arrow.Record {
