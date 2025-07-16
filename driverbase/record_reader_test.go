@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package driverbase_test
+package driverbase
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/adbc-drivers/driverbase-go/driverbase"
+	"github.com/adbc-drivers/driverbase-go/testutil"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -48,7 +48,7 @@ func (s *BaseRecordReaderSuite) TearDownTest() {
 }
 
 func (s *BaseRecordReaderSuite) TestInitErrors() {
-	rr := &driverbase.BaseRecordReader{}
+	rr := &BaseRecordReader{}
 	defer rr.Release()
 	// staticcheck tries to make the nil context here non-nil, but we're intentionally
 	// testing a nil context.
@@ -76,18 +76,18 @@ func (s *implNoInitialResultSet) NextResultSet(ctx context.Context, rec arrow.Re
 	return nil, fmt.Errorf("no result set")
 }
 
-// If we have no parameters and NextResultSet fails, we fail immediately in Init.
+// When there are no parameters and NextResultSet fails, we fail immediately in Init.
 func (s *BaseRecordReaderSuite) TestInitNoInitialResultSet() {
-	rr := &driverbase.BaseRecordReader{}
+	rr := &BaseRecordReader{}
 	defer rr.Release()
 	s.ErrorContains(rr.Init(s.ctx, s.mem, nil, 0, &implNoInitialResultSet{}), "no result set")
 }
 
-// If we have parameters but the parameters are empty, we get back an empty reader with an
-// empty schema.
+// When there are parameters but the parameters are empty, we get back an empty reader
+// with an empty schema.
 func (s *BaseRecordReaderSuite) TestInitNoParams() {
 	impl := &implNoInitialResultSet{}
-	rr := &driverbase.BaseRecordReader{}
+	rr := &BaseRecordReader{}
 	defer rr.Release()
 	schema := arrow.NewSchema([]arrow.Field{}, nil)
 	params, err := array.NewRecordReader(schema, []arrow.Record{})
@@ -124,7 +124,8 @@ func (s *implBeginAppending) NextResultSet(ctx context.Context, rec arrow.Record
 	return nil, fmt.Errorf("no result set")
 }
 
-// BeginAppending should be called once with an initialized builder.
+// BeginAppending should be called once with an initialized builder.  Also tests an empty
+// result set.
 func (s *BaseRecordReaderSuite) TestInitBeginAppending() {
 	impl := &implBeginAppending{
 		t: s.T(),
@@ -132,7 +133,7 @@ func (s *BaseRecordReaderSuite) TestInitBeginAppending() {
 			{Name: "ints", Type: arrow.PrimitiveTypes.Int32, Nullable: true},
 		}, nil),
 	}
-	rr := &driverbase.BaseRecordReader{}
+	rr := &BaseRecordReader{}
 	defer rr.Release()
 	s.NoError(rr.Init(s.ctx, s.mem, nil, 0, impl))
 	s.False(rr.Next())
@@ -141,44 +142,141 @@ func (s *BaseRecordReaderSuite) TestInitBeginAppending() {
 	s.Equal(1, impl.beganAppending)
 }
 
-func (s *BaseRecordReaderSuite) TestCloseErrors() {
-}
-
-func (s *BaseRecordReaderSuite) TestCloseIdempotent() {
-}
-
-func (s *BaseRecordReaderSuite) TestCloseReleaseRetain() {
-}
-
-func (s *BaseRecordReaderSuite) TestEmptyResultSet() {
-}
-
 func (s *BaseRecordReaderSuite) TestNextAfterClose() {
+	rr := &BaseRecordReader{}
+	s.False(rr.Next())
 }
 
-func (s *BaseRecordReaderSuite) TestNextClosesRecord() {
+// There's no good way to validate this invariant.
+// func (s *BaseRecordReaderSuite) TestNextClosesRecord() {
+// }
+
+type implNextCallsClose struct {
+	appended int
 }
 
-func (s *BaseRecordReaderSuite) TestNextNoParams() {
+func (s *implNextCallsClose) AppendRow(builder *array.RecordBuilder) error {
+	if s.appended < 2 {
+		builder.Field(0).(*array.Int32Builder).Append(1)
+		s.appended++
+		return nil
+	}
+	return io.EOF
+}
+func (s *implNextCallsClose) BeginAppending(builder *array.RecordBuilder) error {
+	return nil
+}
+func (s *implNextCallsClose) Close() error {
+	return nil
+}
+func (s *implNextCallsClose) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error) {
+	if s.appended == 0 {
+		return arrow.NewSchema([]arrow.Field{
+			{Name: "ints", Type: arrow.PrimitiveTypes.Int32, Nullable: true},
+		}, nil), nil
+	}
+	return nil, fmt.Errorf("no result set")
 }
 
 func (s *BaseRecordReaderSuite) TestNextCallsClose() {
-	// there are two cases here
+	{
+		// Case 1: if we exactly fill up a batch, then Next() will return
+		// true. The next call to Next() will encounter the EOF and set done, but
+		// since no rows were appended, it will close the reader and return false.
+		impl := &implNextCallsClose{}
+		rr := &BaseRecordReader{}
+		defer rr.Release()
+		// batch size == 2
+		s.NoError(rr.Init(s.ctx, s.mem, nil, 2, impl))
+		s.True(rr.Next())
+		s.Equal(int64(2), rr.Record().NumRows())
+		s.False(rr.done)
+		s.NotNil(rr.impl)
+		s.False(rr.Next())
+		s.True(rr.done)
+		s.Nil(rr.impl)
+		s.NoError(rr.Err())
+	}
+	{
+		// Case 2: if we append less than a batch, then Next() will return true
+		// and set done.  The next call to Next() will encounter the done flag and
+		// return false, closing the reader.
+		impl := &implNextCallsClose{}
+		rr := &BaseRecordReader{}
+		defer rr.Release()
+		// batch size == 4
+		s.NoError(rr.Init(s.ctx, s.mem, nil, 4, impl))
+		s.True(rr.Next())
+		s.Equal(int64(2), rr.Record().NumRows())
+		s.True(rr.done)
+		s.NotNil(rr.impl)
+		s.False(rr.Next())
+		s.True(rr.done)
+		s.Nil(rr.impl)
+		s.NoError(rr.Err())
+	}
 }
 
-func (s *BaseRecordReaderSuite) TestNextAppendRowError() {
+type implNextResultSetAcrossParams struct {
+	resultSet int
+	appended  int
 }
 
-func (s *BaseRecordReaderSuite) TestNextResultSet() {
+func (s *implNextResultSetAcrossParams) AppendRow(builder *array.RecordBuilder) error {
+	if s.resultSet >= 2 && s.resultSet <= 4 {
+		// These result sets are empty
+		return io.EOF
+	}
+	if s.appended < 2 {
+		builder.Field(0).(*array.Int32Builder).Append(1)
+		s.appended++
+		return nil
+	}
+	return io.EOF
+}
+func (s *implNextResultSetAcrossParams) BeginAppending(builder *array.RecordBuilder) error {
+	return nil
+}
+func (s *implNextResultSetAcrossParams) Close() error {
+	return nil
+}
+func (s *implNextResultSetAcrossParams) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error) {
+	s.resultSet++
+	s.appended = 0
+	return arrow.NewSchema([]arrow.Field{
+		{Name: "ints", Type: arrow.PrimitiveTypes.Int32, Nullable: true},
+	}, nil), nil
 }
 
+// When there are parameters, Next() should call NextResultSet() as necessary to get
+// enough rows (or until exhausting the reader), ignoring empty result sets
 func (s *BaseRecordReaderSuite) TestNextResultSetAcrossParams() {
-	// pull rows as needed to get to the batch size
-}
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "ints", Type: arrow.PrimitiveTypes.Int32, Nullable: true},
+	}, nil)
+	rec1 := testutil.RecordFromJSON(s.T(), s.mem, schema, `[{"ints": 1}, {"ints": 2}, {"ints": 3}, {"ints": 4}]`)
+	rec2 := testutil.RecordFromJSON(s.T(), s.mem, schema, `[{"ints": 1}, {"ints": 2}, {"ints": 3}, {"ints": 4}]`)
+	params, err := array.NewRecordReader(schema, []arrow.Record{rec1, rec2})
+	s.NoError(err)
+	defer rec1.Release()
+	defer rec2.Release()
 
-func (s *BaseRecordReaderSuite) TestNextResultSetEmpty() {
-	// keep going even if the result set has 0 rows
-}
+	impl := &implNextResultSetAcrossParams{}
+	rr := &BaseRecordReader{}
+	defer rr.Release()
+	// batch size == 4
+	s.NoError(rr.Init(s.ctx, s.mem, params, 4, impl))
 
-func (s *BaseRecordReaderSuite) TestNextResultSetError() {
+	s.True(rr.Next())
+	s.Equal(int64(4), rr.Record().NumRows())
+
+	s.True(rr.Next())
+	s.Equal(int64(4), rr.Record().NumRows())
+
+	s.True(rr.Next())
+	s.Equal(int64(2), rr.Record().NumRows())
+
+	s.False(rr.Next())
+
+	s.NoError(rr.Err())
 }

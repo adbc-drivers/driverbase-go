@@ -133,10 +133,6 @@ func (rr *BaseRecordReader) Close() {
 		}
 		rr.impl = nil
 	}
-	if rr.paramRecord != nil {
-		rr.paramRecord.Release()
-		rr.paramRecord = nil
-	}
 	if rr.params != nil {
 		if err := rr.params.Err(); err != nil {
 			rr.err = errors.Join(rr.err, err)
