@@ -163,6 +163,11 @@ func (bi *BulkIngestManager) Init() error {
 			Msg:  fmt.Sprintf("[%s] Cannot specify catalog/schema name and temporary table", bi.DriverName),
 			Code: adbc.StatusInvalidState,
 		}
+	} else if bi.Options.CatalogName != "" && bi.Options.SchemaName == "" {
+		return adbc.Error{
+			Msg:  fmt.Sprintf("[%s] Cannot specify catalog name without schema name", bi.DriverName),
+			Code: adbc.StatusInvalidState,
+		}
 	}
 
 	return nil
