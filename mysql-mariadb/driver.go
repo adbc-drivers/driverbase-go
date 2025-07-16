@@ -5,13 +5,10 @@ import (
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
-	"github.com/apache/arrow/go/arrow/memory"
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // Driver implements the ADBC Driver interface for MySQL via database/sql.
-// It delegates configuration and option handling to driverbase.
-// The Go MySQL driver is registered via the blank import above.
 type Driver struct {
 	driverbase.DriverImplBase
 }

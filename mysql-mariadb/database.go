@@ -46,9 +46,6 @@ func newDatabase(ctx context.Context, driver *Driver, opts map[string]string) (a
 	if err != nil {
 		return nil, err
 	}
-	// Optional: tune pool parameters
-	sqlDB.SetMaxOpenConns(4)
-	sqlDB.SetMaxIdleConns(2)
 
 	// Initialize driverbase plumbing (SetOption/GetOption, etc.)
 	base, err := driverbase.NewDatabaseImplBase(ctx, &driver.DriverImplBase)
