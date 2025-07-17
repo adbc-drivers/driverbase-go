@@ -7,8 +7,8 @@ import (
 	"database/sql"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
+	"github.com/adbc-drivers/driverbase-go/sqldriver"
 	"github.com/apache/arrow-adbc/go/adbc"
-	_ "github.com/go-sql-driver/mysql"
 )
 
 // databaseImpl implements the ADBC Database interface on top of database/sql.
@@ -28,7 +28,11 @@ func newDatabase(ctx context.Context, driver *Driver, opts map[string]string) (a
 	}
 
 	// Open the underlying SQL pool
-	sqlDB, err := sql.Open("mysql", dsn)
+	sqlDB, err := sqldriver.New(
+		sqldriver.WithDriverName("mysql"),
+		sqldriver.WithDSN(dsn),
+		sqldriver.WithMaxOpenConns(25),
+	)
 	if err != nil {
 		return nil, err
 	}
