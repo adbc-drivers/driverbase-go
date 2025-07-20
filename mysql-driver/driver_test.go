@@ -7,16 +7,15 @@ import (
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDriver(t *testing.T) {
 	dsn := "root:password@tcp(localhost:3306)/mysql"
 
-	driver := NewDriver(memory.DefaultAllocator)
+	mysqlDriver := NewDriver()
 
-	db, err := driver.NewDatabase(map[string]string{
+	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
 	})
 	require.NoError(t, err)
@@ -61,5 +60,7 @@ func TestDriver(t *testing.T) {
 	// 3) Call Bind and expect a NotImplemented error
 	err = stmt.Bind(context.Background(), rec)
 	require.Error(t, err, "Bind should not be implemented yet")
+
+	t.Log("✅ TestDriver passed successfully")
 
 }

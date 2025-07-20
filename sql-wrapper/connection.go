@@ -1,4 +1,4 @@
-package mysql
+package sql
 
 import (
 	"context"
@@ -17,21 +17,19 @@ type connectionImpl struct {
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
-func newConnection(db *databaseImpl) (adbc.Connection, error) {
+func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, error) {
 	// Acquire a dedicated session
-	sqlConn, err := db.db.Conn(context.Background())
+	sqlConn, err := db.db.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// Set up the driverbase plumbing
-	impl := &connectionImpl{conn: sqlConn}
 	base := driverbase.NewConnectionImplBase(&db.DatabaseImplBase)
-	if err != nil {
-		sqlConn.Close()
-		return nil, err
+	impl := &connectionImpl{
+		ConnectionImplBase: base,
+		conn:               sqlConn,
 	}
-	impl.ConnectionImplBase = base
 
 	// Build and return the ADBC Connection wrapper
 	builder := driverbase.NewConnectionBuilder(impl)

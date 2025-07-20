@@ -1,4 +1,4 @@
-package mysql
+package sql
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"database/sql"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
-	"github.com/adbc-drivers/driverbase-go/sqldriver"
 	"github.com/apache/arrow-adbc/go/adbc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // databaseImpl implements the ADBC Database interface on top of database/sql.
@@ -20,25 +20,32 @@ type databaseImpl struct {
 }
 
 // newDatabase constructs a new ADBC Database backed by *sql.DB.
-func newDatabase(ctx context.Context, driver *Driver, opts map[string]string) (adbc.Database, error) {
-	// Pull the DSN from the standard ADBC URI option
-	dsn := opts[adbc.OptionKeyURI]
-	if dsn == "" {
-		return nil, fmt.Errorf("missing required option %s", adbc.OptionKeyURI)
+func newDatabase(ctx context.Context, opts map[string]string) (adbc.Database, error) {
+	drvName, ok := opts["driver"]
+	if !ok {
+		return nil, fmt.Errorf(`sql-wrapper: missing opts["driver"]`)
+	}
+	dsn, ok := opts[adbc.OptionKeyURI]
+	if !ok {
+		return nil, fmt.Errorf("sql-wrapper: missing %q", adbc.OptionKeyURI)
 	}
 
 	// Open the underlying SQL pool
-	sqlDB, err := sqldriver.New(
-		sqldriver.WithDriverName("mysql"),
-		sqldriver.WithDSN(dsn),
-		sqldriver.WithMaxOpenConns(25),
-	)
+	sqlDB, err := sql.Open(drvName, dsn)
 	if err != nil {
 		return nil, err
 	}
 
+	if err := sqlDB.PingContext(ctx); err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
+
 	// Initialize driverbase plumbing (SetOption/GetOption, etc.)
-	base, err := driverbase.NewDatabaseImplBase(ctx, &driver.DriverImplBase)
+	info := driverbase.DefaultDriverInfo(drvName)
+	drvImpl := driverbase.NewDriverImplBase(info, memory.DefaultAllocator)
+
+	base, err := driverbase.NewDatabaseImplBase(ctx, &drvImpl)
 	if err != nil {
 		sqlDB.Close()
 		return nil, err
@@ -54,5 +61,10 @@ func newDatabase(ctx context.Context, driver *Driver, opts map[string]string) (a
 
 // Open creates a new ADBC Connection (session) by acquiring a *sql.Conn.
 func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
-	return newConnection(d)
+	return newConnection(ctx, d)
+}
+
+// Closes the database and its underlying connection pool.
+func (d *databaseImpl) Close() error {
+	return d.db.Close()
 }

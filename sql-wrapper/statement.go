@@ -1,4 +1,4 @@
-package mysql
+package sql
 
 import (
 	"context"
@@ -18,6 +18,8 @@ type statementImpl struct {
 	conn *sql.Conn
 	// query holds the SQL to execute
 	query string
+	// stmt holds the prepared statement, if Prepare() was called
+	stmt *sql.Stmt
 }
 
 // Base returns the embedded StatementImplBase for driverbase plumbing
@@ -27,7 +29,7 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 
 // newStatement constructs a new statementImpl wrapped by driverbase
 func newStatement(c *connectionImpl) adbc.Statement {
-	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
+	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ConnectionImplBase.ErrorHelper)
 	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: base,
 		conn:              c.conn,
@@ -36,6 +38,11 @@ func newStatement(c *connectionImpl) adbc.Statement {
 
 // SetSqlQuery stores the SQL text on the statement
 func (s *statementImpl) SetSqlQuery(query string) error {
+	// if someone resets the SQL after Prepare, clean up the old stmt
+	if s.stmt != nil {
+		s.stmt.Close()
+		s.stmt = nil
+	}
 	s.query = query
 	return nil
 }
@@ -57,11 +64,14 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
-	q, err := s.GetQuery()
-	if err != nil {
-		return 0, err
+	var res sql.Result
+	var err error
+
+	if s.stmt != nil {
+		res, err = s.stmt.ExecContext(ctx)
+	} else {
+		res, err = s.conn.ExecContext(ctx, s.query)
 	}
-	res, err := s.conn.ExecContext(ctx, q)
 	if err != nil {
 		return 0, err
 	}
@@ -80,9 +90,11 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	return nil, -1, err
 }
 
-// Close releases any resources held by the statement (no-op here)
+// Close shuts down the prepared stmt (if any)
 func (s *statementImpl) Close() error {
-	// No per-statement resources to clean up
+	if s.stmt != nil {
+		return s.stmt.Close()
+	}
 	return nil
 }
 
@@ -97,8 +109,17 @@ func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
 	return nil, s.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "GetParameterSchema not supported")
 }
 
+// Prepare actually prepares the query on the connection
 func (s *statementImpl) Prepare(ctx context.Context) error {
-	return s.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "Prepare not supported")
+	if s.query == "" {
+		return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "no query to prepare")
+	}
+	ps, err := s.conn.PrepareContext(ctx, s.query)
+	if err != nil {
+		return err
+	}
+	s.stmt = ps
+	return nil
 }
 
 // SetSubstraitPlan sets the Substrait plan on the statement; not supported here.
