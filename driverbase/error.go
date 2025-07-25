@@ -1,3 +1,8 @@
+// Copyright (c) 2025 ADBC Drivers Contributors.
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -28,10 +33,22 @@ type ErrorHelper struct {
 	DriverName string
 }
 
-func (helper *ErrorHelper) Errorf(code adbc.Status, message string, format ...interface{}) error {
+func (helper *ErrorHelper) Errorf(code adbc.Status, message string, format ...any) error {
 	msg := fmt.Sprintf(message, format...)
 	return adbc.Error{
 		Code: code,
 		Msg:  fmt.Sprintf("[%s] %s", helper.DriverName, msg),
 	}
+}
+
+func (helper *ErrorHelper) InvalidArgument(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusInvalidArgument, message, format...)
+}
+
+func (helper *ErrorHelper) InvalidState(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusInvalidState, message, format...)
+}
+
+func (helper *ErrorHelper) NotImplemented(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusNotImplemented, message, format...)
 }
