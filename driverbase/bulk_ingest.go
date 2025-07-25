@@ -15,6 +15,7 @@
 package driverbase
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -77,6 +78,47 @@ func NewBulkIngestOptions() BulkIngestOptions {
 	}
 }
 
+func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (bool, error) {
+	switch key {
+	case adbc.OptionKeyIngestTargetTable:
+		options.TableName = val
+	case adbc.OptionValueIngestTargetCatalog:
+		options.CatalogName = val
+	case adbc.OptionValueIngestTargetDBSchema:
+		options.SchemaName = val
+	case adbc.OptionKeyIngestMode:
+		switch val {
+		case adbc.OptionValueIngestModeAppend:
+			fallthrough
+		case adbc.OptionValueIngestModeCreate:
+			fallthrough
+		case adbc.OptionValueIngestModeReplace:
+			fallthrough
+		case adbc.OptionValueIngestModeCreateAppend:
+			options.Mode = val
+		default:
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid statement option %s=%s", key, val)
+		}
+	default:
+		return false, nil
+	}
+	return true, nil
+}
+
+// IsSet returns true if the user has set a table name to ingest into.
+func (options *BulkIngestOptions) IsSet() bool {
+	return options.TableName != ""
+}
+
+// Clear resets the destination options.
+func (options *BulkIngestOptions) Clear() {
+	options.TableName = ""
+	options.SchemaName = ""
+	options.CatalogName = ""
+	options.Temporary = false
+	options.Mode = adbc.OptionValueIngestModeCreate
+}
+
 type BulkIngestTableExistsBehavior int
 
 const (
@@ -92,20 +134,22 @@ const (
 	BulkIngestTableMissingCreate
 )
 
+// BulkIngestSink is a buffer, ready for Parquet data to be written to it.  It
+// can be an in-memory buffer, or it could be an open file handle.
 type BulkIngestSink interface {
 	io.Closer
 	Sink() io.Writer
 }
 
-// BulkIngestPendingUpload is a set of rows serialized to Parquet, ready to be uploaded to
-// the remote system.
+// BulkIngestPendingUpload is a set of rows serialized to Parquet, ready to be
+// uploaded or written to the staging area.
 type BulkIngestPendingUpload struct {
 	Data BulkIngestSink
 	Rows int64
 }
 
-// BulkIngestPendingCopy is a file that was uploaded and is ready to be COPY-d into the
-// remote system.
+// BulkIngestPendingCopy is a file that was uploaded to the staging area and
+// is ready to be copied into the target table.
 type BulkIngestPendingCopy interface {
 	fmt.Stringer
 	Rows() int64
@@ -120,13 +164,13 @@ type BulkIngestImpl interface {
 }
 
 type BulkIngestManager struct {
-	Impl       BulkIngestImpl
-	DriverName string
-	Logger     *slog.Logger
-	Alloc      memory.Allocator
-	Ctx        context.Context
-	Options    BulkIngestOptions
-	Data       array.RecordReader
+	Impl        BulkIngestImpl
+	ErrorHelper *ErrorHelper
+	Logger      *slog.Logger
+	Alloc       memory.Allocator
+	Ctx         context.Context
+	Options     BulkIngestOptions
+	Data        array.RecordReader
 
 	// Internal state
 	records chan arrow.Record
@@ -147,27 +191,15 @@ func (bi *BulkIngestManager) Close() {
 
 func (bi *BulkIngestManager) Init() error {
 	if bi.Options.TableName == "" {
-		return adbc.Error{
-			Msg:  fmt.Sprintf("[%s] Must set %s to ingest data", bi.DriverName, adbc.OptionKeyIngestTargetTable),
-			Code: adbc.StatusInvalidState,
-		}
+		return bi.ErrorHelper.InvalidState("must set %s to ingest data", adbc.OptionKeyIngestTargetTable)
 	} else if bi.Data == nil {
-		return adbc.Error{
-			Msg:  fmt.Sprintf("[%s] Must bind data to ingest", bi.DriverName),
-			Code: adbc.StatusInvalidState,
-		}
+		return bi.ErrorHelper.InvalidState("must bind data to ingest")
 	} else if bi.Options.Mode == "" {
 		bi.Options.Mode = adbc.OptionValueIngestModeCreate
 	} else if bi.Options.Temporary && (bi.Options.CatalogName != "" || bi.Options.SchemaName != "") {
-		return adbc.Error{
-			Msg:  fmt.Sprintf("[%s] Cannot specify catalog/schema name and temporary table", bi.DriverName),
-			Code: adbc.StatusInvalidState,
-		}
+		return bi.ErrorHelper.InvalidState("cannot specify catalog/schema name and temporary table")
 	} else if bi.Options.CatalogName != "" && bi.Options.SchemaName == "" {
-		return adbc.Error{
-			Msg:  fmt.Sprintf("[%s] Cannot specify catalog name without schema name", bi.DriverName),
-			Code: adbc.StatusInvalidState,
-		}
+		return bi.ErrorHelper.InvalidState("cannot specify catalog name without schema name")
 	}
 
 	return nil
@@ -247,6 +279,7 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 					}
 
 					rows, bytes, err := writeParquetForIngestion(&bi.Options.WriterProps, schema, bi.records, sink.Sink())
+					// TODO(lidavidm): in these cases, don't we still need to delete the file?
 					if err != nil {
 						return errors.Join(err, sink.Close())
 					} else if rows == 0 {
@@ -402,4 +435,16 @@ func writeParquetForIngestion(writerProps *WriterProps, schema *arrow.Schema, re
 	}
 
 	return rows, w.RowGroupTotalCompressedBytes(), nil
+}
+
+type BufferBulkIngestSink struct {
+	bytes.Buffer
+}
+
+func (sink *BufferBulkIngestSink) Sink() io.Writer {
+	return &sink.Buffer
+}
+
+func (*BufferBulkIngestSink) Close() error {
+	return nil
 }
