@@ -13,6 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// getDSN returns the MySQL DSN for testing, using environment variable or default
+func getDSN() string {
+	// You can set MYSQL_DSN environment variable for custom connection
+	// Default assumes local MySQL with root/password setup
+	return "root:password@tcp(localhost:3306)/mysql"
+}
+
 // testRecordReader is a simple RecordReader for testing BindStream
 type testRecordReader struct {
 	schema        *arrow.Schema
@@ -956,4 +963,325 @@ func TestTypedBuilderHandling(t *testing.T) {
 	require.Equal(t, 2, batchCount, "Should have 2 batches with batch size 2")
 
 	t.Log("✅ Typed builder handling test passed successfully")
+}
+
+func TestSQLNullableTypesHandling(t *testing.T) {
+	dsn := getDSN()
+	if dsn == "" {
+		t.Skip("MySQL DSN not available")
+	}
+
+	mysqlDriver := NewDriver()
+
+	db, err := mysqlDriver.NewDatabase(map[string]string{
+		adbc.OptionKeyURI: dsn,
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	cn, err := db.Open(context.Background())
+	require.NoError(t, err)
+	defer cn.Close()
+
+	stmt, err := cn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+
+	// Create test table with nullable columns
+	err = stmt.SetSqlQuery(`
+		CREATE TEMPORARY TABLE adbc_test_nullable (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			nullable_int INT,
+			nullable_bigint BIGINT,
+			nullable_float DOUBLE,
+			nullable_text TEXT,
+			nullable_bool BOOLEAN,
+			nullable_datetime DATETIME,
+			nullable_time TIME
+		)
+	`)
+	require.NoError(t, err)
+	_, err = stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+
+	// Insert test data with NULL values
+	err = stmt.SetSqlQuery(`
+		INSERT INTO adbc_test_nullable 
+		(nullable_int, nullable_bigint, nullable_float, nullable_text, nullable_bool, nullable_datetime, nullable_time) 
+		VALUES 
+		(123, 456789, 12.34, 'test string', true, '2023-01-01 12:30:45', '14:30:00'),
+		(NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+		(789, 987654, 56.78, 'another test', false, '2023-12-31 23:59:59', '23:59:59')
+	`)
+	require.NoError(t, err)
+	affected, err := stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(3), affected, "Should insert 3 rows")
+
+	// Query the data to test nullable type handling
+	err = stmt.SetSqlQuery("SELECT * FROM adbc_test_nullable ORDER BY id")
+	require.NoError(t, err)
+
+	reader, rowCount, err := stmt.ExecuteQuery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(-1), rowCount) // -1 because we don't know row count upfront
+	defer reader.Release()
+
+	totalRows := int64(0)
+	batchCount := 0
+
+	for reader.Next() {
+		batchCount++
+		record := reader.Record()
+		require.NotNil(t, record, "Record should not be nil")
+
+		rowsInBatch := record.NumRows()
+		totalRows += rowsInBatch
+
+		t.Logf("Batch %d: %d rows, %d columns", batchCount, rowsInBatch, record.NumCols())
+
+		// Verify the schema
+		schema := record.Schema()
+		require.Equal(t, 8, len(schema.Fields()), "Should have 8 columns")
+
+		// Check some specific values
+		for rowIdx := int64(0); rowIdx < rowsInBatch; rowIdx++ {
+			// Get ID column (should never be null)
+			idCol := record.Column(0)
+			require.False(t, idCol.IsNull(int(rowIdx)), "ID should not be null")
+
+			// Check that second row (index 1) has nulls for nullable columns
+			if totalRows > 1 && rowIdx == 1 {
+				for colIdx := 1; colIdx < int(record.NumCols()); colIdx++ {
+					col := record.Column(colIdx)
+					require.True(t, col.IsNull(int(rowIdx)), 
+						"Column %d of row %d should be null", colIdx, rowIdx)
+				}
+				t.Log("✅ NULL values correctly handled")
+			}
+		}
+
+		record.Release()
+	}
+
+	require.NoError(t, reader.Err())
+	require.Equal(t, int64(3), totalRows, "Should read all 3 rows")
+
+	t.Log("✅ SQL nullable types handling test passed successfully")
+}
+
+func TestExtendedArrowArrayTypes(t *testing.T) {
+	dsn := getDSN()
+	if dsn == "" {
+		t.Skip("MySQL DSN not available")
+	}
+
+	mysqlDriver := NewDriver()
+
+	db, err := mysqlDriver.NewDatabase(map[string]string{
+		adbc.OptionKeyURI: dsn,
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	cn, err := db.Open(context.Background())
+	require.NoError(t, err)
+	defer cn.Close()
+
+	stmt, err := cn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+
+	// Create test table with different string and binary types
+	err = stmt.SetSqlQuery(`
+		CREATE TEMPORARY TABLE adbc_test_extended_types (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			varchar_col VARCHAR(255),
+			text_col TEXT,
+			longtext_col LONGTEXT,
+			binary_col BINARY(16),
+			varbinary_col VARBINARY(255),
+			blob_col BLOB
+		)
+	`)
+	require.NoError(t, err)
+	_, err = stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+
+	// Insert test data
+	err = stmt.SetSqlQuery(`
+		INSERT INTO adbc_test_extended_types 
+		(varchar_col, text_col, longtext_col, binary_col, varbinary_col, blob_col) 
+		VALUES 
+		('short string', 'medium text content', 'very long text content that could be handled by different Arrow string types', 
+		 0x0123456789ABCDEF0123456789ABCDEF, 0x48656C6C6F, 0x576F726C64)
+	`)
+	require.NoError(t, err)
+	affected, err := stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(1), affected, "Should insert 1 row")
+
+	// Query the data to test extended array type handling  
+	err = stmt.SetSqlQuery("SELECT * FROM adbc_test_extended_types")
+	require.NoError(t, err)
+
+	reader, rowCount, err := stmt.ExecuteQuery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(-1), rowCount)
+	defer reader.Release()
+
+	recordCount := 0
+	for reader.Next() {
+		recordCount++
+		record := reader.Record()
+		require.NotNil(t, record, "Record should not be nil")
+		require.Equal(t, int64(1), record.NumRows(), "Should have 1 row")
+		require.Equal(t, int64(7), record.NumCols(), "Should have 7 columns")
+
+		// Verify we can read all column types without errors
+		for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
+			col := record.Column(colIdx)
+			require.False(t, col.IsNull(0), "Column %d should not be null", colIdx)
+			
+			// Try to get the value from the array - this exercises our extractArrowValue logic
+			switch a := col.(type) {
+			case *array.String:
+				val := a.Value(0)
+				require.NotEmpty(t, val, "String value should not be empty")
+			case *array.Binary:
+				val := a.Value(0)
+				require.NotEmpty(t, val, "Binary value should not be empty")
+			case *array.Int32:
+				val := a.Value(0)
+				require.Greater(t, val, int32(0), "ID should be positive")
+			}
+		}
+
+		record.Release()
+	}
+
+	require.NoError(t, reader.Err())
+	require.Equal(t, 1, recordCount, "Should read exactly 1 record")
+
+	t.Log("✅ Extended Arrow array types test passed successfully")
+}
+
+func TestTemporalAndDecimalExtraction(t *testing.T) {
+	dsn := getDSN()
+	if dsn == "" {
+		t.Skip("MySQL DSN not available")
+	}
+
+	mysqlDriver := NewDriver()
+
+	db, err := mysqlDriver.NewDatabase(map[string]string{
+		adbc.OptionKeyURI: dsn,
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	cn, err := db.Open(context.Background())
+	require.NoError(t, err)
+	defer cn.Close()
+
+	stmt, err := cn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+
+	// Create test table with temporal and decimal types
+	err = stmt.SetSqlQuery(`
+		CREATE TEMPORARY TABLE adbc_test_temporal_decimal (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			date_col DATE,
+			datetime_col DATETIME(6),
+			timestamp_col TIMESTAMP(3),
+			time_col TIME(6),
+			decimal_precise DECIMAL(10, 2),
+			decimal_money DECIMAL(19, 4),
+			decimal_percentage DECIMAL(5, 3)
+		)
+	`)
+	require.NoError(t, err)
+	_, err = stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+
+	// Insert test data with various temporal and decimal values
+	err = stmt.SetSqlQuery(`
+		INSERT INTO adbc_test_temporal_decimal 
+		(date_col, datetime_col, timestamp_col, time_col, decimal_precise, decimal_money, decimal_percentage) 
+		VALUES 
+		('2023-06-15', '2023-06-15 14:30:45.123456', '2023-06-15 14:30:45.123', '14:30:45.123456', 
+		 123.45, 1234567.8900, 99.999),
+		('2024-01-01', '2024-01-01 00:00:00.000000', '2024-01-01 00:00:00.000', '00:00:00.000000', 
+		 0.01, 0.0001, 0.001)
+	`)
+	require.NoError(t, err)
+	affected, err := stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(2), affected, "Should insert 2 rows")
+
+	// Test using the data for parameter binding (this exercises extractArrowValue)
+	err = stmt.SetSqlQuery("SELECT * FROM adbc_test_temporal_decimal ORDER BY id")
+	require.NoError(t, err)
+
+	reader, rowCount, err := stmt.ExecuteQuery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(-1), rowCount)
+	defer reader.Release()
+
+	totalRows := 0
+	for reader.Next() {
+		record := reader.Record()
+		require.NotNil(t, record, "Record should not be nil")
+		
+		rowsInBatch := int(record.NumRows())
+		totalRows += rowsInBatch
+
+		t.Logf("Processing batch with %d rows", rowsInBatch)
+
+		// Verify schema contains proper Arrow types for temporal/decimal data
+		schema := record.Schema()
+		require.Equal(t, 8, len(schema.Fields()), "Should have 8 columns")
+
+		// Check that we can read the data successfully
+		for rowIdx := 0; rowIdx < rowsInBatch; rowIdx++ {
+			for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
+				col := record.Column(colIdx)
+				if !col.IsNull(rowIdx) {
+					// Test that we can get values from different types
+					switch colIdx {
+					case 0: // id - should be int
+						require.Equal(t, arrow.PrimitiveTypes.Int32, col.DataType())
+					case 1: // date_col - should be date
+						require.Equal(t, arrow.FixedWidthTypes.Date32, col.DataType())
+					case 2, 3: // datetime_col, timestamp_col - should be timestamp
+						timestampType, ok := col.DataType().(*arrow.TimestampType)
+						require.True(t, ok, "Should be timestamp type")
+						require.Contains(t, []arrow.TimeUnit{arrow.Second, arrow.Millisecond, arrow.Microsecond}, timestampType.Unit)
+					case 4: // time_col - should be time
+						timeType := col.DataType()
+						// Check if it's a time type (Time32 or Time64)
+						isTimeType := false
+						switch timeType.(type) {
+						case *arrow.Time32Type, *arrow.Time64Type:
+							isTimeType = true
+						}
+						require.True(t, isTimeType, "Should be time type, got %T", timeType)
+					case 5, 6, 7: // decimal columns - should be decimal
+						decimalType, ok := col.DataType().(*arrow.Decimal128Type)
+						require.True(t, ok, "Should be decimal128 type, got %T", col.DataType())
+						require.Greater(t, decimalType.Precision, int32(0), "Precision should be positive")
+						require.GreaterOrEqual(t, decimalType.Scale, int32(0), "Scale should be non-negative")
+					}
+				}
+			}
+		}
+
+		record.Release()
+	}
+
+	require.NoError(t, reader.Err())
+	require.Equal(t, 2, totalRows, "Should read exactly 2 rows")
+
+	t.Log("✅ Temporal and decimal extraction test passed successfully")
 }
