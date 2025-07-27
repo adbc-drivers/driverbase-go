@@ -3,15 +3,172 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/extensions"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow/scalar"
 )
+
+// Custom option keys for the sql-wrapper
+const (
+	// OptionKeyBatchSize controls how many Arrow records to accumulate before executing as a batch
+	OptionKeyBatchSize = "adbc.statement.batch_size"
+	// OptionKeyTypeConverter sets the type converter for SQL-to-Arrow conversion
+	OptionKeyTypeConverter = "adbc.connection.type_converter"
+)
+
+// TypeConverter allows higher-level drivers to customize SQL-to-Arrow type conversion
+type TypeConverter interface {
+	// ConvertColumnType converts a SQL column type to an Arrow type and nullable flag
+	// It also returns metadata that should be included in the Arrow field
+	ConvertColumnType(colType *sql.ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
+}
+
+// DefaultTypeConverter provides the default SQL-to-Arrow type conversion
+type DefaultTypeConverter struct{}
+
+// TypeConverterRegistry manages registered type converters
+var typeConverterRegistry = map[string]func() TypeConverter{
+	"default": func() TypeConverter { return &DefaultTypeConverter{} },
+}
+
+// RegisterTypeConverter registers a type converter factory function with a name
+func RegisterTypeConverter(name string, factory func() TypeConverter) {
+	typeConverterRegistry[name] = factory
+}
+
+// GetTypeConverter retrieves a type converter by name
+func GetTypeConverter(name string) (TypeConverter, bool) {
+	factory, exists := typeConverterRegistry[name]
+	if !exists {
+		return nil, false
+	}
+	return factory(), true
+}
+
+// ConvertColumnType implements TypeConverter interface with the default conversion logic
+func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.DataType, bool, arrow.Metadata, error) {
+	typeName := strings.ToUpper(colType.DatabaseTypeName())
+	nullable, _ := colType.Nullable()
+
+	// Handle DECIMAL/NUMERIC types with proper precision and scale
+	if typeName == "DECIMAL" || typeName == "NUMERIC" {
+		if precision, scale, ok := colType.DecimalSize(); ok {
+			// Create Arrow Decimal128 type with actual precision and scale
+			arrowType := &arrow.Decimal128Type{Precision: int32(precision), Scale: int32(scale)}
+
+			// Build metadata with decimal information
+			keys := []string{"sql.database_type_name", "sql.column_name", "sql.precision", "sql.scale"}
+			values := []string{colType.DatabaseTypeName(), colType.Name(), fmt.Sprintf("%d", precision), fmt.Sprintf("%d", scale)}
+			metadata := arrow.NewMetadata(keys, values)
+
+			return arrowType, nullable, metadata, nil
+		}
+		// Fall back to string if precision/scale not available
+	}
+
+	// Handle DATETIME/TIMESTAMP types with proper precision
+	if typeName == "DATETIME" || typeName == "TIMESTAMP" {
+		// Try to get precision from DecimalSize (which represents fractional seconds precision)
+		var timestampType arrow.DataType
+		keys := []string{"sql.database_type_name", "sql.column_name"}
+		values := []string{colType.DatabaseTypeName(), colType.Name()}
+
+		if precision, _, ok := colType.DecimalSize(); ok {
+			// precision represents fractional seconds digits (0-6)
+			keys = append(keys, "sql.fractional_seconds_precision")
+			values = append(values, fmt.Sprintf("%d", precision))
+
+			switch precision {
+			case 0:
+				// No fractional seconds - use seconds
+				timestampType = arrow.FixedWidthTypes.Timestamp_s
+			case 1, 2, 3:
+				// 1-3 digits: milliseconds precision
+				timestampType = arrow.FixedWidthTypes.Timestamp_ms
+			case 4, 5, 6:
+				// 4-6 digits: microseconds precision
+				timestampType = arrow.FixedWidthTypes.Timestamp_us
+			default:
+				// Fallback to microseconds for unexpected values
+				timestampType = arrow.FixedWidthTypes.Timestamp_us
+			}
+		} else {
+			// No precision info available, default to microseconds (most common)
+			timestampType = arrow.FixedWidthTypes.Timestamp_us
+		}
+
+		metadata := arrow.NewMetadata(keys, values)
+		return timestampType, nullable, metadata, nil
+	}
+
+	// Handle TIME types with proper precision
+	if typeName == "TIME" {
+		// Try to get precision from DecimalSize (which represents fractional seconds precision)
+		var timeType arrow.DataType
+		keys := []string{"sql.database_type_name", "sql.column_name"}
+		values := []string{colType.DatabaseTypeName(), colType.Name()}
+
+		if precision, _, ok := colType.DecimalSize(); ok {
+			// precision represents fractional seconds digits (0-6)
+			keys = append(keys, "sql.fractional_seconds_precision")
+			values = append(values, fmt.Sprintf("%d", precision))
+
+			switch precision {
+			case 0:
+				// No fractional seconds - use 32-bit seconds (closest available)
+				timeType = arrow.FixedWidthTypes.Time32s
+			case 1, 2, 3:
+				// 1-3 digits: use 32-bit milliseconds (closest available)
+				timeType = arrow.FixedWidthTypes.Time32ms
+			case 4, 5, 6:
+				// 4-6 digits: microseconds precision
+				timeType = arrow.FixedWidthTypes.Time64us
+			default:
+				// Fallback to microseconds for unexpected values
+				timeType = arrow.FixedWidthTypes.Time64us
+			}
+		} else {
+			// No precision info available, default to microseconds (most common)
+			timeType = arrow.FixedWidthTypes.Time64us
+		}
+
+		metadata := arrow.NewMetadata(keys, values)
+		return timeType, nullable, metadata, nil
+	}
+
+	// For all other types, use the existing conversion
+	arrowType, nullable := sqlTypeToArrow(colType)
+
+	// Build metadata with original SQL type information
+	keys := []string{"sql.database_type_name", "sql.column_name"}
+	values := []string{colType.DatabaseTypeName(), colType.Name()}
+
+	// Add additional metadata if available
+	if length, ok := colType.Length(); ok {
+		keys = append(keys, "sql.length")
+		values = append(values, fmt.Sprintf("%d", length))
+	}
+
+	if precision, scale, ok := colType.DecimalSize(); ok {
+		keys = append(keys, "sql.precision", "sql.scale")
+		values = append(values, fmt.Sprintf("%d", precision), fmt.Sprintf("%d", scale))
+	}
+
+	// Create metadata with all collected information
+	metadata := arrow.NewMetadata(keys, values)
+
+	return arrowType, nullable, metadata, nil
+}
 
 // statementImpl implements the ADBC Statement interface on top of database/sql.
 type statementImpl struct {
@@ -27,6 +184,12 @@ type statementImpl struct {
 	boundRecord arrow.Record
 	// boundParams holds converted parameters for batch execution
 	boundParams [][]interface{}
+	// boundStream holds the bound Arrow record stream for streaming bulk operations
+	boundStream array.RecordReader
+	// batchSize controls how many records to process at once during streaming execution
+	batchSize int
+	// typeConverter handles SQL-to-Arrow type conversion
+	typeConverter TypeConverter
 }
 
 // Base returns the embedded StatementImplBase for driverbase plumbing
@@ -40,6 +203,8 @@ func newStatement(c *connectionImpl) adbc.Statement {
 	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: base,
 		conn:              c.conn,
+		batchSize:         1000, // Default batch size for streaming operations
+		typeConverter:     c.typeConverter,
 	})
 }
 
@@ -55,8 +220,22 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 }
 
 // GetQuery returns the stored SQL text
-func (s *statementImpl) GetQuery() (string, error) {
-	return s.query, nil
+func (s *statementImpl) GetQuery() string {
+	return s.query
+}
+
+// SetOption sets a string option on this statement
+func (s *statementImpl) SetOption(key, val string) error {
+	switch key {
+	case OptionKeyBatchSize:
+		size, err := strconv.Atoi(val)
+		if err != nil {
+			return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "invalid batch size: %v", err)
+		}
+		return s.SetBatchSize(size)
+	default:
+		return s.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "unsupported option: %s", key)
+	}
 }
 
 // Bind uses an arrow record batch to bind parameters to the query
@@ -68,18 +247,16 @@ func (s *statementImpl) Bind(ctx context.Context, record arrow.Record) error {
 	// Release any previous bound record
 	if s.boundRecord != nil {
 		s.boundRecord.Release()
+		s.boundRecord = nil
 	}
-
-	// Retain the record (we'll release it when statement is closed or new record is bound)
-	record.Retain()
-	s.boundRecord = record
+	s.boundParams = nil
 
 	// Convert Arrow record to SQL parameters
 	params, err := s.convertArrowRecordToParams(record)
 	if err != nil {
 		return err
 	}
-	
+
 	s.boundParams = params
 	return nil
 }
@@ -90,51 +267,42 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 		return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "stream cannot be nil")
 	}
 
-	// Clear any previous bound parameters
+	// Clear any previous bound parameters and records
 	if s.boundRecord != nil {
 		s.boundRecord.Release()
 		s.boundRecord = nil
 	}
+	if s.boundStream != nil {
+		s.boundStream.Release()
+		s.boundStream = nil
+	}
 	s.boundParams = nil
 
-	// Process all records from the stream and accumulate parameters
-	var allParams [][]interface{}
-	
-	for stream.Next() {
-		record := stream.Record()
-		if record == nil {
-			continue
-		}
-
-		// Convert this record to parameters
-		params, err := s.convertArrowRecordToParams(record)
-		if err != nil {
-			return err
-		}
-
-		// Append to our accumulated parameters
-		allParams = append(allParams, params...)
-	}
-
-	// Check for stream errors
-	if err := stream.Err(); err != nil {
-		return err
-	}
-
-	// Store the accumulated parameters
-	s.boundParams = allParams
-
-	// Release the stream (as per ADBC contract)
-	stream.Release()
+	// Store the stream for lazy consumption during execution
+	stream.Retain()
+	s.boundStream = stream
 
 	return nil
 }
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
+	// If we have a bound stream, execute it with streaming batches
+	if s.boundStream != nil {
+		return s.executeStreamBatch(ctx)
+	}
+
 	// If we have bound parameters, execute them as a batch
 	if s.boundParams != nil {
 		return s.executeBatch(ctx)
+	}
+
+	// Nothing to execute if neither prepared stmt nor raw SQL is set
+	if s.stmt == nil && s.query == "" {
+		return 0, s.Base().ErrorHelper.Errorf(
+			adbc.StatusInvalidArgument,
+			"no SQL statement provided",
+		)
 	}
 
 	// Regular execution without parameters
@@ -164,12 +332,8 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error
 	var rows *sql.Rows
 	var err error
 
-	if s.stmt != nil {
-		// Can't use prepared statement with modified query, fall back to direct execution
-		rows, err = s.conn.QueryContext(ctx, limitQuery)
-	} else {
-		rows, err = s.conn.QueryContext(ctx, limitQuery)
-	}
+	// Can't use prepared statement with modified query, fall back to direct execution
+	rows, err = s.conn.QueryContext(ctx, limitQuery)
 
 	if err != nil {
 		return nil, err
@@ -182,17 +346,25 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error
 		return nil, err
 	}
 
-	// Convert SQL column types to Arrow fields
+	// Convert SQL column types to Arrow schema
+	return s.buildArrowSchemaFromColumnTypes(columnTypes)
+}
+
+// buildArrowSchemaFromColumnTypes creates an Arrow schema from SQL column types using the type converter
+func (s *statementImpl) buildArrowSchemaFromColumnTypes(columnTypes []*sql.ColumnType) (*arrow.Schema, error) {
 	fields := make([]arrow.Field, len(columnTypes))
 	for i, colType := range columnTypes {
-		arrowType, nullable := sqlTypeToArrow(colType)
+		arrowType, nullable, metadata, err := s.typeConverter.ConvertColumnType(colType)
+		if err != nil {
+			return nil, err
+		}
 		fields[i] = arrow.Field{
 			Name:     colType.Name(),
 			Type:     arrowType,
 			Nullable: nullable,
+			Metadata: metadata,
 		}
 	}
-
 	return arrow.NewSchema(fields, nil), nil
 }
 
@@ -230,10 +402,6 @@ func sqlTypeToArrow(colType *sql.ColumnType) (arrow.DataType, bool) {
 	case "DOUBLE", "DOUBLE PRECISION":
 		return arrow.PrimitiveTypes.Float64, nullable
 
-	// Decimal types - map to string for now (Arrow decimal requires precision/scale)
-	case "DECIMAL", "NUMERIC":
-		return arrow.BinaryTypes.String, nullable
-
 	// String types
 	case "CHAR", "VARCHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT", "TINYTEXT":
 		return arrow.BinaryTypes.String, nullable
@@ -245,18 +413,15 @@ func sqlTypeToArrow(colType *sql.ColumnType) (arrow.DataType, bool) {
 	// Date/time types
 	case "DATE":
 		return arrow.FixedWidthTypes.Date32, nullable
-	case "DATETIME", "TIMESTAMP":
-		return arrow.FixedWidthTypes.Timestamp_us, nullable
-	case "TIME":
-		return arrow.FixedWidthTypes.Time64us, nullable
 
 	// Boolean type
 	case "BOOLEAN", "BOOL":
 		return arrow.FixedWidthTypes.Boolean, nullable
 
-	// JSON type (MySQL specific)
+	// JSON type
 	case "JSON":
-		return arrow.BinaryTypes.String, nullable
+		jsonType, _ := extensions.NewJSONType(arrow.BinaryTypes.String)
+		return jsonType, nullable
 
 	// Default to string for unknown types
 	default:
@@ -274,13 +439,13 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	// Execute the query
 	var rows *sql.Rows
 	var err error
-	
+
 	if s.stmt != nil {
 		rows, err = s.stmt.QueryContext(ctx)
 	} else {
 		rows, err = s.conn.QueryContext(ctx, s.query)
 	}
-	
+
 	if err != nil {
 		return nil, -1, err
 	}
@@ -293,16 +458,11 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	}
 
 	// Build Arrow schema
-	fields := make([]arrow.Field, len(columnTypes))
-	for i, colType := range columnTypes {
-		arrowType, nullable := sqlTypeToArrow(colType)
-		fields[i] = arrow.Field{
-			Name:     colType.Name(),
-			Type:     arrowType,
-			Nullable: nullable,
-		}
+	schema, err := s.buildArrowSchemaFromColumnTypes(columnTypes)
+	if err != nil {
+		rows.Close()
+		return nil, -1, err
 	}
-	schema := arrow.NewSchema(fields, nil)
 
 	// Create a record reader that will stream the results
 	reader := &sqlRecordReader{
@@ -310,6 +470,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		rows:        rows,
 		columnTypes: columnTypes,
 		allocator:   memory.DefaultAllocator,
+		batchSize:   s.batchSize,
 		done:        false,
 	}
 
@@ -324,10 +485,16 @@ func (s *statementImpl) Close() error {
 		s.boundRecord.Release()
 		s.boundRecord = nil
 	}
-	
+
+	// Release bound stream if any
+	if s.boundStream != nil {
+		s.boundStream.Release()
+		s.boundStream = nil
+	}
+
 	// Clear bound parameters
 	s.boundParams = nil
-	
+
 	// Close prepared statement
 	if s.stmt != nil {
 		return s.stmt.Close()
@@ -366,16 +533,21 @@ func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
 	return arrow.NewSchema(fields, nil), nil
 }
 
-// Prepare actually prepares the query on the connection
-func (s *statementImpl) Prepare(ctx context.Context) error {
+func (s *statementImpl) Prepare(ctx context.Context) (err error) {
 	if s.query == "" {
 		return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "no query to prepare")
 	}
-	ps, err := s.conn.PrepareContext(ctx, s.query)
-	if err != nil {
-		return err
+
+	s.stmt, err = s.conn.PrepareContext(ctx, s.query)
+	return
+}
+
+// SetBatchSize configures the batch size for streaming operations
+func (s *statementImpl) SetBatchSize(size int) error {
+	if size <= 0 {
+		return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "batch size must be positive")
 	}
-	s.stmt = ps
+	s.batchSize = size
 	return nil
 }
 
@@ -386,10 +558,11 @@ func (s *statementImpl) SetSubstraitPlan([]byte) error {
 
 // sqlRecordReader implements array.RecordReader for streaming SQL results as Arrow records
 type sqlRecordReader struct {
-	schema      *arrow.Schema
-	rows        *sql.Rows
-	columnTypes []*sql.ColumnType
+	schema        *arrow.Schema
+	rows          *sql.Rows
+	columnTypes   []*sql.ColumnType
 	allocator     memory.Allocator
+	batchSize     int
 	done          bool
 	err           error
 	currentRecord arrow.Record
@@ -412,55 +585,63 @@ func (r *sqlRecordReader) Next() bool {
 		r.currentRecord = nil
 	}
 
-	// Read a batch of rows (we'll start with 1000 rows per batch)
-	const batchSize = 1000
-	var batch [][]interface{}
-	
+	// Read a batch of rows using the configurable batch size
+	// Use Arrow RecordBuilder to handle all column builders automatically
+	recordBuilder := array.NewRecordBuilder(r.allocator, r.schema)
+	defer recordBuilder.Release()
+
 	rowCount := 0
-	for rowCount < batchSize && r.rows.Next() {
+	for rowCount < r.batchSize && r.rows.Next() {
 		// Create a slice to hold the column values for this row
 		values := make([]interface{}, len(r.columnTypes))
 		valuePtrs := make([]interface{}, len(r.columnTypes))
-		
+
 		// Create pointers to the values for Scan
 		for i := range values {
 			valuePtrs[i] = &values[i]
 		}
-		
+
 		if err := r.rows.Scan(valuePtrs...); err != nil {
 			r.err = err
 			return false
 		}
-		
-		batch = append(batch, values)
+
+		// Append values to the record builder
+		for colIdx, val := range values {
+			builder := recordBuilder.Field(colIdx)
+			if val == nil {
+				builder.AppendNull()
+			} else {
+				// Use Arrow's built-in scalar creation and appending
+				if err := r.appendValue(builder, val); err != nil {
+					r.err = fmt.Errorf("failed to append value to column %d: %w", colIdx, err)
+					return false
+				}
+			}
+		}
+
 		rowCount++
 	}
-	
+
 	if rowCount == 0 {
 		r.done = true
 		return false
 	}
-	
+
 	// Check for errors after reading
 	if err := r.rows.Err(); err != nil {
 		r.err = err
 		return false
 	}
-	
-	// Convert batch to Arrow record
-	record, err := r.batchToArrowRecord(batch)
-	if err != nil {
-		r.err = err
-		return false
-	}
-	
-	r.currentRecord = record
-	
+
+	// Build Arrow record from the record builder
+	r.currentRecord = recordBuilder.NewRecord()
+
 	// Check if we've reached the end
-	if rowCount < batchSize {
+	if rowCount < r.batchSize {
 		r.done = true
 	}
-	
+
 	return true
 }
 
@@ -494,102 +675,89 @@ func (r *sqlRecordReader) Retain() {
 	// No-op: this reader doesn't use reference counting
 }
 
-// batchToArrowRecord converts a batch of SQL rows to an Arrow record
-func (r *sqlRecordReader) batchToArrowRecord(batch [][]interface{}) (arrow.Record, error) {
-	if len(batch) == 0 {
-		return nil, fmt.Errorf("empty batch")
+// appendValue appends a value to an Arrow builder using Arrow's built-in scalar system
+// This replaces the complex custom type handling with Arrow's MakeScalar + AppendScalar pattern
+func (r *sqlRecordReader) appendValue(builder array.Builder, val interface{}) error {
+	if val == nil {
+		builder.AppendNull()
+		return nil
 	}
 	
-	numCols := len(r.columnTypes)
-	numRows := len(batch)
-	
-	// Create arrays for each column
-	arrays := make([]arrow.Array, numCols)
-	
-	for colIdx := 0; colIdx < numCols; colIdx++ {
-		arrowType, _ := sqlTypeToArrow(r.columnTypes[colIdx])
-		
-		// Extract column values from batch
-		columnValues := make([]interface{}, numRows)
-		for rowIdx := 0; rowIdx < numRows; rowIdx++ {
-			columnValues[rowIdx] = batch[rowIdx][colIdx]
-		}
-		
-		// Build Arrow array based on type
-		arr, err := r.buildArrowArray(arrowType, columnValues)
+	// Handle SQL nullable types via the driver.Valuer interface
+	// All sql.NullXxx types implement driver.Valuer
+	if valuer, ok := val.(driver.Valuer); ok {
+		actualVal, err := valuer.Value()
 		if err != nil {
-			return nil, fmt.Errorf("failed to build array for column %d: %w", colIdx, err)
+			return fmt.Errorf("failed to get value from driver.Valuer: %w", err)
 		}
-		arrays[colIdx] = arr
-	}
-	
-	// Create and return the record
-	return array.NewRecord(r.schema, arrays, int64(numRows)), nil
-}
-
-// buildArrowArray creates an Arrow array from SQL column values
-func (r *sqlRecordReader) buildArrowArray(arrowType arrow.DataType, values []interface{}) (arrow.Array, error) {
-	switch arrowType.ID() {
-	case arrow.INT32:
-		return r.buildInt32Array(values)
-	case arrow.INT64:
-		return r.buildInt64Array(values)
-	case arrow.STRING:
-		return r.buildStringArray(values)
-	case arrow.FLOAT32:
-		return r.buildFloat32Array(values)
-	case arrow.FLOAT64:
-		return r.buildFloat64Array(values)
-	case arrow.BOOL:
-		return r.buildBoolArray(values)
-	default:
-		// Default to string for unsupported types
-		return r.buildStringArray(values)
-	}
-}
-
-// buildInt32Array creates an Int32Array from interface{} values
-func (r *sqlRecordReader) buildInt32Array(values []interface{}) (arrow.Array, error) {
-	builder := array.NewInt32Builder(r.allocator)
-	defer builder.Release()
-	
-	for _, val := range values {
-		if val == nil {
+		if actualVal == nil {
 			builder.AppendNull()
-		} else {
-			// Convert to int32
-			switch v := val.(type) {
-			case int32:
-				builder.Append(v)
-			case int64:
-				builder.Append(int32(v))
-			case int:
-				builder.Append(int32(v))
-			default:
-				return nil, fmt.Errorf("cannot convert %T to int32", val)
+			return nil
+		}
+		val = actualVal
+	}
+	
+	// Special handling for []byte to string conversion for string builders
+	// This preserves the existing behavior for MySQL CHAR/VARCHAR columns
+	if bytes, ok := val.([]byte); ok {
+		switch builder.(type) {
+		case *array.StringBuilder, *array.LargeStringBuilder, *array.StringViewBuilder:
+			val = string(bytes)
+		}
+	}
+	
+	// Use Arrow's built-in scalar creation and appending
+	sc := scalar.MakeScalar(val)
+	if sc == nil {
+		// Fallback to string conversion for types Arrow doesn't recognize
+		return builder.AppendValueFromString(fmt.Sprintf("%v", val))
+	}
+	
+	// Try to append the scalar directly
+	if scalarAppender, ok := builder.(interface{ AppendScalar(scalar.Scalar) error }); ok {
+		return scalarAppender.AppendScalar(sc)
+	}
+	
+	// Fallback: handle specific builder types for special cases
+	switch b := builder.(type) {
+	case *array.BinaryBuilder, *array.BinaryViewBuilder, *array.FixedSizeBinaryBuilder:
+		// For binary builders, append raw bytes directly
+		if bytes, ok := val.([]byte); ok {
+			if bb, ok := b.(*array.BinaryBuilder); ok {
+				bb.Append(bytes)
+				return nil
+			}
+			if bvb, ok := b.(*array.BinaryViewBuilder); ok {
+				bvb.Append(bytes)
+				return nil
+			}
+			if fsbb, ok := b.(*array.FixedSizeBinaryBuilder); ok {
+				fsbb.Append(bytes)
+				return nil
 			}
 		}
+		// Fall through to string conversion for non-byte values
 	}
 	
-	return builder.NewArray(), nil
+	// Final fallback: use string conversion
+	return builder.AppendValueFromString(sc.String())
 }
 
 // convertArrowRecordToParams converts an Arrow record to SQL parameters
 func (s *statementImpl) convertArrowRecordToParams(record arrow.Record) ([][]interface{}, error) {
-	numRows := int(record.NumRows())
-	numCols := int(record.NumCols())
-	
+	numRows, numCols := int(record.NumRows()), int(record.NumCols())
+
 	if numRows == 0 {
 		return nil, nil
 	}
-	
+
 	// Create a slice of parameter rows
 	params := make([][]interface{}, numRows)
-	
+
 	// Convert each row
 	for rowIdx := 0; rowIdx < numRows; rowIdx++ {
 		rowParams := make([]interface{}, numCols)
-		
+
 		// Convert each column value for this row
 		for colIdx := 0; colIdx < numCols; colIdx++ {
 			arr := record.Column(colIdx)
@@ -599,65 +767,162 @@ func (s *statementImpl) convertArrowRecordToParams(record arrow.Record) ([][]int
 			}
 			rowParams[colIdx] = value
 		}
-		
+
 		params[rowIdx] = rowParams
 	}
-	
+
 	return params, nil
 }
 
 // extractArrowValue extracts a value from an Arrow array at the given index
+// This now uses Arrow's built-in scalar system instead of manual type switching
 func (s *statementImpl) extractArrowValue(arr arrow.Array, index int) (interface{}, error) {
 	if arr.IsNull(index) {
 		return nil, nil
 	}
 	
-	switch a := arr.(type) {
-	case *array.Int32:
-		return a.Value(index), nil
-	case *array.Int64:
-		return a.Value(index), nil
-	case *array.Int16:
-		return a.Value(index), nil
-	case *array.Int8:
-		return a.Value(index), nil
-	case *array.Uint32:
-		return a.Value(index), nil
-	case *array.Uint64:
-		return a.Value(index), nil
-	case *array.Uint16:
-		return a.Value(index), nil
-	case *array.Uint8:
-		return a.Value(index), nil
-	case *array.Float32:
-		return a.Value(index), nil
-	case *array.Float64:
-		return a.Value(index), nil
-	case *array.String:
-		return a.Value(index), nil
-	case *array.Boolean:
-		return a.Value(index), nil
-	case *array.Binary:
-		return a.Value(index), nil
+	// Use Arrow's built-in scalar extraction
+	sc, err := scalar.GetScalar(arr, index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get scalar from array: %w", err)
+	}
+	
+	// Convert the scalar to an appropriate Go value
+	return s.scalarToGoValue(sc), nil
+}
+
+// scalarToGoValue converts an Arrow scalar to an appropriate Go value
+// This handles the specific needs for SQL parameter binding
+func (s *statementImpl) scalarToGoValue(sc scalar.Scalar) interface{} {
+	if !sc.IsValid() {
+		return nil
+	}
+	
+	switch s := sc.(type) {
+	// Primitive types
+	case *scalar.Int8:
+		return s.Value
+	case *scalar.Int16:
+		return s.Value
+	case *scalar.Int32:
+		return s.Value
+	case *scalar.Int64:
+		return s.Value
+	case *scalar.Uint8:
+		return s.Value
+	case *scalar.Uint16:
+		return s.Value
+	case *scalar.Uint32:
+		return s.Value
+	case *scalar.Uint64:
+		return s.Value
+	case *scalar.Float32:
+		return s.Value
+	case *scalar.Float64:
+		return s.Value
+	case *scalar.Boolean:
+		return s.Value
+	
+	// String and binary types
+	case *scalar.String:
+		return string(s.Value.Bytes())
+	case *scalar.LargeString:
+		return string(s.Value.Bytes())
+	case *scalar.Binary:
+		return s.Value.Bytes()
+	case *scalar.LargeBinary:
+		return s.Value.Bytes()
+	case *scalar.FixedSizeBinary:
+		return s.Value.Bytes()
+	
+	// Temporal types - convert to time.Time
+	case *scalar.Date32:
+		// Date32 stores days since epoch
+		return time.Unix(int64(s.Value)*24*3600, 0).UTC()
+	case *scalar.Date64:
+		// Date64 stores milliseconds since epoch
+		return time.Unix(0, int64(s.Value)*int64(time.Millisecond)).UTC()
+	case *scalar.Time32:
+		// Time32 - convert to time.Time (time of day)
+		switch s.Type.(*arrow.Time32Type).Unit {
+		case arrow.Second:
+			return time.Unix(int64(s.Value), 0).UTC()
+		case arrow.Millisecond:
+			return time.Unix(0, int64(s.Value)*int64(time.Millisecond)).UTC()
+		default:
+			return time.Unix(0, int64(s.Value)*int64(time.Millisecond)).UTC()
+		}
+	case *scalar.Time64:
+		// Time64 - convert to time.Time (time of day)
+		switch s.Type.(*arrow.Time64Type).Unit {
+		case arrow.Microsecond:
+			return time.Unix(0, int64(s.Value)*int64(time.Microsecond)).UTC()
+		case arrow.Nanosecond:
+			return time.Unix(0, int64(s.Value)).UTC()
+		default:
+			return time.Unix(0, int64(s.Value)*int64(time.Microsecond)).UTC()
+		}
+	case *scalar.Timestamp:
+		// Timestamp - convert to time.Time
+		switch s.Type.(*arrow.TimestampType).Unit {
+		case arrow.Second:
+			return time.Unix(int64(s.Value), 0).UTC()
+		case arrow.Millisecond:
+			return time.Unix(0, int64(s.Value)*int64(time.Millisecond)).UTC()
+		case arrow.Microsecond:
+			return time.Unix(0, int64(s.Value)*int64(time.Microsecond)).UTC()
+		case arrow.Nanosecond:
+			return time.Unix(0, int64(s.Value)).UTC()
+		default:
+			return time.Unix(0, int64(s.Value)*int64(time.Microsecond)).UTC()
+		}
+	
+	// Decimal types - use string representation
+	case *scalar.Decimal128:
+		return s.String()
+	case *scalar.Decimal256:
+		return s.String()
+	
+	// TODO: Add support for remaining scalar types in follow-up work:
+	// - Dictionary scalars
+	// - List/Map/Struct scalars  
+	// - Extension type scalars
+	// - Duration/Interval scalars
+	//
+	// Note: Arrow Go v18 only has Decimal128 and Decimal256 scalar types.
+	// Decimal32 and Decimal64 arrays are handled by the fallback case since
+	// their corresponding scalar types don't exist yet.
+	//
+	// StringView and BinaryView arrays are automatically handled by Arrow's
+	// scalar.GetScalar() function. However, we need to ensure BinaryView returns []byte
+	// to maintain functional equivalence with direct array.Value(index) calls.
+	//
+	// For now, fall back to string representation for other unsupported types
+	
 	default:
-		return nil, fmt.Errorf("unsupported Arrow array type: %T", arr)
+		// Handle BinaryView specially to return []byte (not string)
+		// to maintain functional equivalence with array.BinaryView.Value(index)
+		if sc.DataType().ID() == arrow.BINARY_VIEW {
+			// For BinaryView, we want []byte, not string
+			return []byte(sc.String())
+		}
+		
+		// Fallback to string representation for any other unhandled scalar types
+		// This correctly handles StringView and other view types
+		return sc.String()
 	}
 }
 
-// executeBatch executes the statement with bound parameters as a batch
-func (s *statementImpl) executeBatch(ctx context.Context) (int64, error) {
-	if len(s.boundParams) == 0 {
-		return 0, nil
-	}
-	
+// executeStreamBatch executes the statement with a bound stream, processing records in batches
+func (s *statementImpl) executeStreamBatch(ctx context.Context) (int64, error) {
 	if s.query == "" {
 		return 0, s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "no query set")
 	}
-	
-	// If we have a prepared statement, use it; otherwise prepare the query
+
+	// Prepare statement if needed
 	var stmt *sql.Stmt
 	var err error
-	
+
 	if s.stmt != nil {
 		stmt = s.stmt
 	} else {
@@ -667,150 +932,115 @@ func (s *statementImpl) executeBatch(ctx context.Context) (int64, error) {
 		}
 		defer stmt.Close()
 	}
-	
+
+	var totalAffected int64
+	var accumulatedParams [][]interface{}
+	recordsProcessed := 0
+
+	// Helper function to execute accumulated parameters
+	executeBatch := func() error {
+		if len(accumulatedParams) == 0 {
+			return nil
+		}
+
+		for _, rowParams := range accumulatedParams {
+			result, err := stmt.ExecContext(ctx, rowParams...)
+			if err != nil {
+				return err
+			}
+
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+
+			totalAffected += affected
+		}
+
+		// Clear accumulated parameters after execution
+		accumulatedParams = nil
+		return nil
+	}
+
+	// Process the stream, accumulating records up to batchSize
+	for s.boundStream.Next() {
+		record := s.boundStream.Record()
+		if record == nil {
+			continue
+		}
+
+		// Convert this record to parameters
+		params, err := s.convertArrowRecordToParams(record)
+		if err != nil {
+			return totalAffected, err
+		}
+
+		// Accumulate parameters from this record
+		accumulatedParams = append(accumulatedParams, params...)
+		recordsProcessed++
+
+		// Execute batch when we reach batchSize
+		if recordsProcessed >= s.batchSize {
+			if err := executeBatch(); err != nil {
+				return totalAffected, err
+			}
+			recordsProcessed = 0
+		}
+	}
+
+	// Execute any remaining accumulated parameters
+	if err := executeBatch(); err != nil {
+		return totalAffected, err
+	}
+
+	// Check for stream errors
+	if err := s.boundStream.Err(); err != nil {
+		return totalAffected, err
+	}
+
+	return totalAffected, nil
+}
+
+// executeBatch executes the statement with bound parameters as a batch
+func (s *statementImpl) executeBatch(ctx context.Context) (int64, error) {
+	if len(s.boundParams) == 0 {
+		return 0, nil
+	}
+
+	if s.query == "" {
+		return 0, s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "no query set")
+	}
+
+	// If we have a prepared statement, use it; otherwise prepare the query
+	var stmt *sql.Stmt
+	var err error
+
+	if s.stmt != nil {
+		stmt = s.stmt
+	} else {
+		stmt, err = s.conn.PrepareContext(ctx, s.query)
+		if err != nil {
+			return 0, err
+		}
+		defer stmt.Close()
+	}
+
 	// Execute each row of parameters
 	var totalAffected int64
-	
+
 	for _, rowParams := range s.boundParams {
 		result, err := stmt.ExecContext(ctx, rowParams...)
 		if err != nil {
 			return totalAffected, err
 		}
-		
+
 		affected, err := result.RowsAffected()
 		if err != nil {
 			return totalAffected, err
 		}
-		
+
 		totalAffected += affected
 	}
-	
+
 	return totalAffected, nil
-}
-
-// buildInt64Array creates an Int64Array from interface{} values
-func (r *sqlRecordReader) buildInt64Array(values []interface{}) (arrow.Array, error) {
-	builder := array.NewInt64Builder(r.allocator)
-	defer builder.Release()
-	
-	for _, val := range values {
-		if val == nil {
-			builder.AppendNull()
-		} else {
-			// Convert to int64
-			switch v := val.(type) {
-			case int64:
-				builder.Append(v)
-			case int32:
-				builder.Append(int64(v))
-			case int:
-				builder.Append(int64(v))
-			default:
-				return nil, fmt.Errorf("cannot convert %T to int64", val)
-			}
-		}
-	}
-	
-	return builder.NewArray(), nil
-}
-
-// buildStringArray creates a StringArray from interface{} values
-func (r *sqlRecordReader) buildStringArray(values []interface{}) (arrow.Array, error) {
-	builder := array.NewStringBuilder(r.allocator)
-	defer builder.Release()
-	
-	for _, val := range values {
-		if val == nil {
-			builder.AppendNull()
-		} else {
-			// Convert to string, handling common MySQL types
-			var str string
-			switch v := val.(type) {
-			case string:
-				str = v
-			case []byte:
-				str = string(v) // MySQL VARCHAR/TEXT often comes as []byte
-			case nil:
-				builder.AppendNull()
-				continue
-			default:
-				str = fmt.Sprintf("%v", val)
-			}
-			builder.Append(str)
-		}
-	}
-	
-	return builder.NewArray(), nil
-}
-
-// buildFloat32Array creates a Float32Array from interface{} values
-func (r *sqlRecordReader) buildFloat32Array(values []interface{}) (arrow.Array, error) {
-	builder := array.NewFloat32Builder(r.allocator)
-	defer builder.Release()
-	
-	for _, val := range values {
-		if val == nil {
-			builder.AppendNull()
-		} else {
-			// Convert to float32
-			switch v := val.(type) {
-			case float32:
-				builder.Append(v)
-			case float64:
-				builder.Append(float32(v))
-			default:
-				return nil, fmt.Errorf("cannot convert %T to float32", val)
-			}
-		}
-	}
-	
-	return builder.NewArray(), nil
-}
-
-// buildFloat64Array creates a Float64Array from interface{} values
-func (r *sqlRecordReader) buildFloat64Array(values []interface{}) (arrow.Array, error) {
-	builder := array.NewFloat64Builder(r.allocator)
-	defer builder.Release()
-	
-	for _, val := range values {
-		if val == nil {
-			builder.AppendNull()
-		} else {
-			// Convert to float64
-			switch v := val.(type) {
-			case float64:
-				builder.Append(v)
-			case float32:
-				builder.Append(float64(v))
-			default:
-				return nil, fmt.Errorf("cannot convert %T to float64", val)
-			}
-		}
-	}
-	
-	return builder.NewArray(), nil
-}
-
-// buildBoolArray creates a BooleanArray from interface{} values
-func (r *sqlRecordReader) buildBoolArray(values []interface{}) (arrow.Array, error) {
-	builder := array.NewBooleanBuilder(r.allocator)
-	defer builder.Release()
-	
-	for _, val := range values {
-		if val == nil {
-			builder.AppendNull()
-		} else {
-			// Convert to bool
-			switch v := val.(type) {
-			case bool:
-				builder.Append(v)
-			case int64:
-				builder.Append(v != 0)
-			default:
-				return nil, fmt.Errorf("cannot convert %T to bool", val)
-			}
-		}
-	}
-	
-	return builder.NewArray(), nil
 }

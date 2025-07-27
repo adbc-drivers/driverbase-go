@@ -2,7 +2,7 @@ package sql
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"database/sql"
 
@@ -23,11 +23,11 @@ type databaseImpl struct {
 func newDatabase(ctx context.Context, opts map[string]string) (adbc.Database, error) {
 	drvName, ok := opts["driver"]
 	if !ok {
-		return nil, fmt.Errorf(`sql-wrapper: missing opts["driver"]`)
+		return nil, errors.New("missing 'driver' option in sql-wrapper")
 	}
 	dsn, ok := opts[adbc.OptionKeyURI]
-	if !ok {
-		return nil, fmt.Errorf("sql-wrapper: missing %q", adbc.OptionKeyURI)
+	if !ok || dsn == "" {
+		return nil, errors.New("missing 'uri' option in sql-wrapper")
 	}
 
 	// Open the underlying SQL pool
