@@ -19,7 +19,7 @@ go 1.24.3
 require (
 	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-00010101000000-000000000000
 	github.com/apache/arrow-adbc/go/adbc v1.7.0
-	github.com/apache/arrow-go/v18 v18.3.1
+	github.com/apache/arrow-go/v18 v18.4.0
 	github.com/stretchr/testify v1.10.0
 	go.opentelemetry.io/otel v1.37.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.37.0
@@ -31,8 +31,8 @@ require (
 )
 
 require (
-	github.com/andybalholm/brotli v1.1.1 // indirect
-	github.com/apache/thrift v0.21.0 // indirect
+	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/apache/thrift v0.22.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
