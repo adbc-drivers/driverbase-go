@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Columnar Technologies.  All rights reserved.
+// Copyright (c) 2025 ADBC Drivers Contributors
 //
 // This file has been modified from its original version, which is
 // under the Apache License:
