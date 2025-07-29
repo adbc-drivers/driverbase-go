@@ -96,7 +96,10 @@ func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
 	// ensure the URI is present
 	if _, ok := opts[adbc.OptionKeyURI]; !ok {
-		return nil, fmt.Errorf("mysql: missing option %q", adbc.OptionKeyURI)
+		return nil, adbc.Error{
+			Code: adbc.StatusInvalidArgument,
+			Msg:  fmt.Sprintf("mysql: missing option %q", adbc.OptionKeyURI),
+		}
 	}
 
 	// copy and inject the driver name
@@ -130,7 +133,10 @@ func (db *mysqlDatabase) Open(ctx context.Context) (adbc.Connection, error) {
 		err = optionSetter.SetOption(sqlwrapper.OptionKeyTypeConverter, "mysql")
 		if err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("failed to set MySQL type converter: %w", err)
+			return nil, adbc.Error{
+				Code: adbc.StatusInternal,
+				Msg:  fmt.Sprintf("failed to set MySQL type converter: %v", err),
+			}
 		}
 	}
 

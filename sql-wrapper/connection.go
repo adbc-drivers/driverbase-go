@@ -23,7 +23,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 	// Acquire a dedicated session
 	sqlConn, err := db.db.Conn(ctx)
 	if err != nil {
-		return nil, err
+		return nil, db.DatabaseImplBase.ErrorHelper.Errorf(adbc.StatusIO, "failed to acquire database connection: %v", err)
 	}
 
 	// Set up the driverbase plumbing
@@ -82,5 +82,8 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 
 // Close closes the underlying SQL connection
 func (c *connectionImpl) Close() error {
-	return c.conn.Close()
+	if err := c.conn.Close(); err != nil {
+		return c.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to close connection: %v", err)
+	}
+	return nil
 }
