@@ -52,3 +52,7 @@ func (helper *ErrorHelper) InvalidState(message string, format ...any) error {
 func (helper *ErrorHelper) NotImplemented(message string, format ...any) error {
 	return helper.Errorf(adbc.StatusNotImplemented, message, format...)
 }
+
+func (helper *ErrorHelper) IO(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusIO, message, format...)
+}
