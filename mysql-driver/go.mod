@@ -12,15 +12,15 @@ require (
 	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-00010101000000-000000000000
 	github.com/adbc-drivers/driverbase-go/sql v0.0.0-00010101000000-000000000000
 	github.com/apache/arrow-adbc/go/adbc v1.7.0
-	github.com/apache/arrow-go/v18 v18.3.1
+	github.com/apache/arrow-go/v18 v18.4.0
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/stretchr/testify v1.10.0
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/andybalholm/brotli v1.1.1 // indirect
-	github.com/apache/thrift v0.21.0 // indirect
+	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/apache/thrift v0.22.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect

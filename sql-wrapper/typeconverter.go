@@ -13,7 +13,7 @@ import (
 // Custom option keys for type conversion
 const (
 	// OptionKeyTypeConverter sets the type converter for SQL-to-Arrow conversion
-	OptionKeyTypeConverter = "adbc.connection.type_converter"
+	OptionKeyTypeConverter = "adbc.sqlwrapper.type_converter"
 )
 
 // TypeConverter allows higher-level drivers to customize SQL-to-Arrow type conversion

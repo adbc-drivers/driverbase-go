@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -79,18 +80,18 @@ func (s *statementImpl) SetOption(key, val string) error {
 	case OptionKeyBatchSize:
 		size, err := strconv.Atoi(val)
 		if err != nil {
-			return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "invalid batch size: %v", err)
+			return s.Base().ErrorHelper.InvalidArgument("invalid batch size: %v", err)
 		}
 		return s.SetBatchSize(size)
 	default:
-		return s.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "unsupported option: %s", key)
+		return s.Base().ErrorHelper.NotImplemented("unsupported option: %s", key)
 	}
 }
 
 // Bind uses an arrow record batch to bind parameters to the query
 func (s *statementImpl) Bind(ctx context.Context, record arrow.Record) error {
 	if record == nil {
-		return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "record cannot be nil")
+		return s.Base().ErrorHelper.InvalidArgument("record cannot be nil")
 	}
 
 	// Release any previous bound stream
@@ -107,7 +108,7 @@ func (s *statementImpl) Bind(ctx context.Context, record arrow.Record) error {
 // BindStream uses a record batch stream to bind parameters for bulk operations
 func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReader) error {
 	if stream == nil {
-		return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "stream cannot be nil")
+		return s.Base().ErrorHelper.InvalidArgument("stream cannot be nil")
 	}
 
 	// Release any previous bound stream
@@ -125,9 +126,9 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
-	// If we have a bound stream, execute it with streaming batches
+	// If we have a bound stream, execute it with bulk updates
 	if s.boundStream != nil {
-		return s.executeStreamBatch(ctx)
+		return s.executeBulkUpdate(ctx)
 	}
 
 	// Nothing to execute if neither prepared stmt nor raw SQL is set
@@ -148,11 +149,11 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 		res, err = s.conn.ExecContext(ctx, s.query)
 	}
 	if err != nil {
-		return -1, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to execute statement: %v", err)
+		return -1, s.Base().ErrorHelper.IO("failed to execute statement: %v", err)
 	}
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		return rowsAffected, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to get rows affected: %v", err)
+		return rowsAffected, s.Base().ErrorHelper.IO("failed to get rows affected: %v", err)
 	}
 	return rowsAffected, nil
 }
@@ -160,7 +161,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 // ExecuteSchema returns the Arrow schema by querying zero rows
 func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error) {
 	if s.query == "" {
-		return nil, s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "no query set")
+		return nil, s.Base().ErrorHelper.InvalidArgument("no query set")
 	}
 
 	// Execute query with LIMIT 0 to get schema without data
@@ -208,7 +209,7 @@ func (s *statementImpl) buildArrowSchemaFromColumnTypes(columnTypes []*sql.Colum
 // ExecuteQuery runs a SELECT and returns a RecordReader for streaming Arrow records
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
 	if s.query == "" {
-		err := s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "no query set")
+		err := s.Base().ErrorHelper.InvalidArgument("no query set")
 		return nil, -1, err
 	}
 
@@ -223,122 +224,114 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	}
 
 	if err != nil {
-		return nil, -1, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to execute query: %v", err)
+		return nil, -1, s.Base().ErrorHelper.IO("failed to execute query: %v", err)
 	}
 
 	// Get column type information for schema
 	columnTypes, err := rows.ColumnTypes()
 	if err != nil {
 		rows.Close()
-		return nil, -1, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to get column types: %v", err)
+		return nil, -1, s.Base().ErrorHelper.IO("failed to get column types: %v", err)
 	}
 
 	// Build Arrow schema
 	schema, err := s.buildArrowSchemaFromColumnTypes(columnTypes)
 	if err != nil {
 		rows.Close()
-		return nil, -1, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to build Arrow schema: %v", err)
+		return nil, -1, s.Base().ErrorHelper.IO("failed to build Arrow schema: %v", err)
 	}
 
-	// Create a record reader using driverbase pattern
-	reader, err := BuildSQLRecordReader(memory.DefaultAllocator, rows, schema, columnTypes, s.batchSize)
+	// Create a record reader using driverbase BaseRecordReader
+	reader, err := NewSQLRecordReader(ctx, memory.DefaultAllocator, rows, schema, columnTypes, int64(s.batchSize))
 	if err != nil {
 		rows.Close()
-		return nil, -1, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to create record reader: %v", err)
+		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)
 	}
 
 	// Note: We return -1 for row count since we don't know without reading all rows
 	return reader, -1, nil
 }
 
-// BuildSQLRecordReader constructs a RecordReader for streaming SQL results as Arrow records.
-// It follows the driverbase pattern used in BuildGetObjectsRecordReader.
-func BuildSQLRecordReader(mem memory.Allocator, rows *sql.Rows, schema *arrow.Schema, columnTypes []*sql.ColumnType, batchSize int) (array.RecordReader, error) {
-	records := make([]arrow.Record, 0)
+// sqlRecordReaderImpl implements RecordReaderImpl for SQL result sets
+type sqlRecordReaderImpl struct {
+	rows        *sql.Rows
+	columnTypes []*sql.ColumnType
+	values      []interface{}
+	valuePtrs   []interface{}
+	schema      *arrow.Schema
+}
 
-	for {
-		// Build a batch of records
-		bldr := array.NewRecordBuilder(mem, schema)
+// NewSQLRecordReader creates a RecordReader using driverbase.BaseRecordReader for streaming SQL results
+func NewSQLRecordReader(ctx context.Context, mem memory.Allocator, rows *sql.Rows, schema *arrow.Schema, columnTypes []*sql.ColumnType, batchSize int64) (array.RecordReader, error) {
+	impl := &sqlRecordReaderImpl{
+		rows:        rows,
+		columnTypes: columnTypes,
+		values:      make([]interface{}, len(columnTypes)),
+		valuePtrs:   make([]interface{}, len(columnTypes)),
+		schema:      schema,
+	}
 
-		rowCount := 0
-		var batchErr error
+	// Create pointers to the values for Scan
+	for i := range impl.values {
+		impl.valuePtrs[i] = &impl.values[i]
+	}
 
-		// Read up to batchSize rows
-		for rowCount < batchSize && rows.Next() {
-			// Create a slice to hold the column values for this row
-			values := make([]interface{}, len(columnTypes))
-			valuePtrs := make([]interface{}, len(columnTypes))
+	reader := &driverbase.BaseRecordReader{}
+	if err := reader.Init(ctx, mem, nil, batchSize, impl); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	return reader, nil
+}
 
-			// Create pointers to the values for Scan
-			for i := range values {
-				valuePtrs[i] = &values[i]
-			}
+// NextResultSet opens the result set for reading
+func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error) {
+	// For SQL queries, there's only one result set and the schema is already determined
+	return s.schema, nil
+}
 
-			if err := rows.Scan(valuePtrs...); err != nil {
-				batchErr = err
-				break
-			}
+// BeginAppending prepares for appending rows
+func (s *sqlRecordReaderImpl) BeginAppending(builder *array.RecordBuilder) error {
+	return nil // No special initialization needed
+}
 
-			// Append values to the record builder
-			for colIdx, val := range values {
-				builder := bldr.Field(colIdx)
-				if val == nil {
-					builder.AppendNull()
-				} else {
-					// Use helper function to append value
-					if err := appendSQLValue(builder, val); err != nil {
-						batchErr = fmt.Errorf("failed to append value to column %d: %w", colIdx, err)
-						break
-					}
-				}
-			}
-
-			if batchErr != nil {
-				break
-			}
-			rowCount++
-		}
-
+// AppendRow appends a single row from the SQL result set to the record builder
+func (s *sqlRecordReaderImpl) AppendRow(builder *array.RecordBuilder) error {
+	if !s.rows.Next() {
 		// Check for SQL errors
-		if batchErr == nil {
-			if err := rows.Err(); err != nil {
-				batchErr = err
+		if err := s.rows.Err(); err != nil {
+			return err
+		}
+		return io.EOF
+	}
+
+	// Scan the current row into our value holders
+	if err := s.rows.Scan(s.valuePtrs...); err != nil {
+		return err
+	}
+
+	// Append values to the record builder
+	for colIdx, val := range s.values {
+		fieldBuilder := builder.Field(colIdx)
+		if val == nil {
+			fieldBuilder.AppendNull()
+		} else {
+			// Use helper function to append value
+			if err := appendSQLValue(fieldBuilder, val); err != nil {
+				return fmt.Errorf("failed to append value to column %d: %w", colIdx, err)
 			}
-		}
-
-		// If we have an error or no rows, clean up and handle accordingly
-		if batchErr != nil {
-			bldr.Release()
-			// Release any previously built records
-			for _, rec := range records {
-				rec.Release()
-			}
-			rows.Close()
-			return nil, batchErr
-		}
-
-		if rowCount == 0 {
-			// No more rows, we're done
-			bldr.Release()
-			break
-		}
-
-		// Build the record and add it to our collection
-		rec := bldr.NewRecord()
-		bldr.Release()
-		records = append(records, rec)
-
-		// If we read fewer rows than batch size, we've reached the end
-		if rowCount < batchSize {
-			break
 		}
 	}
 
-	// Close the SQL rows now that we've consumed them all
-	rows.Close()
+	return nil
+}
 
-	// Create and return the RecordReader using Arrow's built-in function
-	return array.NewRecordReader(schema, records)
+// Close closes the SQL rows
+func (s *sqlRecordReaderImpl) Close() error {
+	if s.rows != nil {
+		return s.rows.Close()
+	}
+	return nil
 }
 
 // appendSQLValue appends a SQL value to an Arrow builder using Arrow's built-in scalar system
@@ -417,7 +410,7 @@ func (s *statementImpl) Close() error {
 	// Close prepared statement
 	if s.stmt != nil {
 		if err := s.stmt.Close(); err != nil {
-			return s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to close prepared statement: %v", err)
+			return s.Base().ErrorHelper.IO("failed to close prepared statement: %v", err)
 		}
 	}
 	return nil
@@ -425,7 +418,7 @@ func (s *statementImpl) Close() error {
 
 // ExecutePartitions handles partitioned execution; not supported here
 func (s *statementImpl) ExecutePartitions(context.Context) (*arrow.Schema, adbc.Partitions, int64, error) {
-	err := s.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "ExecutePartitions not supported")
+	err := s.Base().ErrorHelper.NotImplemented("ExecutePartitions not supported")
 	return nil, adbc.Partitions{}, 0, err
 }
 
@@ -456,12 +449,12 @@ func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
 
 func (s *statementImpl) Prepare(ctx context.Context) (err error) {
 	if s.query == "" {
-		return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "no query to prepare")
+		return s.Base().ErrorHelper.InvalidArgument("no query to prepare")
 	}
 
 	s.stmt, err = s.conn.PrepareContext(ctx, s.query)
 	if err != nil {
-		return s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to prepare statement: %v", err)
+		return s.Base().ErrorHelper.IO("failed to prepare statement: %v", err)
 	}
 	return nil
 }
@@ -469,7 +462,7 @@ func (s *statementImpl) Prepare(ctx context.Context) (err error) {
 // SetBatchSize configures the batch size for streaming operations
 func (s *statementImpl) SetBatchSize(size int) error {
 	if size <= 0 {
-		return s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "batch size must be positive")
+		return s.Base().ErrorHelper.InvalidArgument("batch size must be positive")
 	}
 	s.batchSize = size
 	return nil
@@ -477,39 +470,9 @@ func (s *statementImpl) SetBatchSize(size int) error {
 
 // SetSubstraitPlan sets the Substrait plan on the statement; not supported here.
 func (s *statementImpl) SetSubstraitPlan([]byte) error {
-	return s.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "SetSubstraitPlan not supported")
+	return s.Base().ErrorHelper.NotImplemented("SetSubstraitPlan not supported")
 }
 
-// convertArrowRecordToParams converts an Arrow record to SQL parameters
-func (s *statementImpl) convertArrowRecordToParams(record arrow.Record) ([][]interface{}, error) {
-	numRows, numCols := int(record.NumRows()), int(record.NumCols())
-
-	if numRows == 0 {
-		return nil, nil
-	}
-
-	// Create a slice of parameter rows
-	params := make([][]interface{}, numRows)
-
-	// Convert each row
-	for rowIdx := 0; rowIdx < numRows; rowIdx++ {
-		rowParams := make([]interface{}, numCols)
-
-		// Convert each column value for this row
-		for colIdx := 0; colIdx < numCols; colIdx++ {
-			arr := record.Column(colIdx)
-			value, err := s.extractArrowValue(arr, rowIdx)
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract value at row %d, col %d: %w", rowIdx, colIdx, err)
-			}
-			rowParams[colIdx] = value
-		}
-
-		params[rowIdx] = rowParams
-	}
-
-	return params, nil
-}
 
 // extractArrowValue extracts a value from an Arrow array at the given index
 // This now uses Arrow's built-in scalar system instead of manual type switching
@@ -650,10 +613,11 @@ func (s *statementImpl) scalarToGoValue(sc scalar.Scalar) interface{} {
 	}
 }
 
-// executeStreamBatch executes the statement with a bound stream, processing records in batches
-func (s *statementImpl) executeStreamBatch(ctx context.Context) (int64, error) {
+// executeBulkUpdate executes bulk updates by iterating through the bound stream directly
+// This is simpler than trying to force BaseRecordReader into an update pattern
+func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
 	if s.query == "" {
-		return -1, s.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "no query set")
+		return -1, s.Base().ErrorHelper.InvalidArgument("no query set")
 	}
 
 	// Prepare statement if needed
@@ -665,74 +629,51 @@ func (s *statementImpl) executeStreamBatch(ctx context.Context) (int64, error) {
 	} else {
 		stmt, err = s.conn.PrepareContext(ctx, s.query)
 		if err != nil {
-			return -1, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to prepare statement for batch execution: %v", err)
+			return -1, s.Base().ErrorHelper.IO("failed to prepare statement for batch execution: %v", err)
 		}
 		defer stmt.Close()
 	}
 
 	var totalAffected int64
-	var accumulatedParams [][]interface{}
-	recordsProcessed := 0
 
-	// Helper function to execute accumulated parameters
-	executeBatch := func() error {
-		if len(accumulatedParams) == 0 {
-			return nil
-		}
-
-		for _, rowParams := range accumulatedParams {
-			result, err := stmt.ExecContext(ctx, rowParams...)
-			if err != nil {
-				return s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to execute batch row: %v", err)
-			}
-
-			affected, err := result.RowsAffected()
-			if err != nil {
-				return s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to get rows affected in batch: %v", err)
-			}
-
-			totalAffected += affected
-		}
-
-		// Clear accumulated parameters after execution
-		accumulatedParams = nil
-		return nil
-	}
-
-	// Process the stream, accumulating records up to batchSize
+	// Process the bound stream directly
 	for s.boundStream.Next() {
 		record := s.boundStream.Record()
 		if record == nil {
 			continue
 		}
 
-		// Convert this record to parameters
-		params, err := s.convertArrowRecordToParams(record)
-		if err != nil {
-			return totalAffected, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to convert Arrow record to parameters: %v", err)
-		}
-
-		// Accumulate parameters from this record
-		accumulatedParams = append(accumulatedParams, params...)
-		recordsProcessed++
-
-		// Execute batch when we reach batchSize
-		if recordsProcessed >= s.batchSize {
-			if err := executeBatch(); err != nil {
-				return totalAffected, err // executeBatch already returns proper ADBC error
+		// Execute the statement for each row in the record
+		numRows := int(record.NumRows())
+		for rowIdx := 0; rowIdx < numRows; rowIdx++ {
+			// Extract parameters for this row
+			params := make([]interface{}, record.NumCols())
+			for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
+				arr := record.Column(colIdx)
+				value, err := s.extractArrowValue(arr, rowIdx)
+				if err != nil {
+					return totalAffected, s.Base().ErrorHelper.IO("failed to extract parameter value: %v", err)
+				}
+				params[colIdx] = value
 			}
-			recordsProcessed = 0
-		}
-	}
 
-	// Execute any remaining accumulated parameters
-	if err := executeBatch(); err != nil {
-		return totalAffected, err // executeBatch already returns proper ADBC error
+			// Execute with parameters
+			result, err := stmt.ExecContext(ctx, params...)
+			if err != nil {
+				return totalAffected, s.Base().ErrorHelper.IO("failed to execute statement: %v", err)
+			}
+
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return totalAffected, s.Base().ErrorHelper.IO("failed to get rows affected: %v", err)
+			}
+			totalAffected += affected
+		}
 	}
 
 	// Check for stream errors
 	if err := s.boundStream.Err(); err != nil {
-		return totalAffected, s.Base().ErrorHelper.Errorf(adbc.StatusIO, "stream error during batch execution: %v", err)
+		return totalAffected, s.Base().ErrorHelper.IO("stream error during execution: %v", err)
 	}
 
 	return totalAffected, nil

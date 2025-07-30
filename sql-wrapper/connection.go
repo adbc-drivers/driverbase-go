@@ -23,7 +23,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 	// Acquire a dedicated session
 	sqlConn, err := db.db.Conn(ctx)
 	if err != nil {
-		return nil, db.DatabaseImplBase.ErrorHelper.Errorf(adbc.StatusIO, "failed to acquire database connection: %v", err)
+		return nil, db.DatabaseImplBase.ErrorHelper.IO("failed to acquire database connection: %v", err)
 	}
 
 	// Set up the driverbase plumbing
@@ -55,12 +55,12 @@ func (c *connectionImpl) SetOption(key, value string) error {
 	case OptionKeyTypeConverter:
 		converter, exists := GetTypeConverter(value)
 		if !exists {
-			return c.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "unknown type converter: %s", value)
+			return c.Base().ErrorHelper.InvalidArgument("unknown type converter: %s", value)
 		}
 		c.SetTypeConverter(converter)
 		return nil
 	default:
-		return c.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "unsupported option: %s", key)
+		return c.Base().ErrorHelper.NotImplemented("unsupported option: %s", key)
 	}
 }
 
@@ -83,7 +83,7 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 // Close closes the underlying SQL connection
 func (c *connectionImpl) Close() error {
 	if err := c.conn.Close(); err != nil {
-		return c.Base().ErrorHelper.Errorf(adbc.StatusIO, "failed to close connection: %v", err)
+		return c.Base().ErrorHelper.IO("failed to close connection: %v", err)
 	}
 	return nil
 }

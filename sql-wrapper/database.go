@@ -41,18 +41,18 @@ func newDatabase(ctx context.Context, opts map[string]string) (adbc.Database, er
 
 	base, err := driverbase.NewDatabaseImplBase(ctx, &drvImpl)
 	if err != nil {
-		return nil, drvImpl.ErrorHelper.Errorf(adbc.StatusIO, "failed to initialize database base: %v", err)
+		return nil, drvImpl.ErrorHelper.IO("failed to initialize database base: %v", err)
 	}
 
 	// Open the underlying SQL pool
 	sqlDB, err := sql.Open(drvName, dsn)
 	if err != nil {
-		return nil, base.ErrorHelper.Errorf(adbc.StatusIO, "failed to open database: %v", err)
+		return nil, base.ErrorHelper.IO("failed to open database: %v", err)
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		sqlDB.Close()
-		return nil, base.ErrorHelper.Errorf(adbc.StatusIO, "failed to ping database: %v", err)
+		return nil, base.ErrorHelper.IO("failed to ping database: %v", err)
 	}
 
 	// Construct and return the ADBC Database wrapper
@@ -71,7 +71,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 // Closes the database and its underlying connection pool.
 func (d *databaseImpl) Close() error {
 	if err := d.db.Close(); err != nil {
-		return d.DatabaseImplBase.ErrorHelper.Errorf(adbc.StatusIO, "failed to close database: %v", err)
+		return d.DatabaseImplBase.ErrorHelper.IO("failed to close database: %v", err)
 	}
 	return nil
 }
