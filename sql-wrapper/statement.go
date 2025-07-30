@@ -20,7 +20,7 @@ import (
 
 // Custom option keys for the sql-wrapper
 const (
-	// OptionKeyBatchSize controls how many Arrow records to accumulate before executing as a batch
+	// OptionKeyBatchSize controls how many Arrow records to accumulate in a record batch
 	OptionKeyBatchSize = "adbc.statement.batch_size"
 )
 
@@ -636,38 +636,47 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
 
 	var totalAffected int64
 
-	// Process the bound stream directly
+	// Process the bound stream, respecting batchSize for Arrow record chunking
 	for s.boundStream.Next() {
 		record := s.boundStream.Record()
 		if record == nil {
 			continue
 		}
 
-		// Execute the statement for each row in the record
+		// Process this Arrow Record in chunks of batchSize
+		// This ensures batchSize controls Arrow record structure, not SQL execution
 		numRows := int(record.NumRows())
-		for rowIdx := 0; rowIdx < numRows; rowIdx++ {
-			// Extract parameters for this row
-			params := make([]interface{}, record.NumCols())
-			for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
-				arr := record.Column(colIdx)
-				value, err := s.extractArrowValue(arr, rowIdx)
-				if err != nil {
-					return totalAffected, s.Base().ErrorHelper.IO("failed to extract parameter value: %v", err)
+		for startRow := 0; startRow < numRows; startRow += s.batchSize {
+			endRow := startRow + s.batchSize
+			if endRow > numRows {
+				endRow = numRows
+			}
+			
+			// Process this chunk of rows (which represents one logical Arrow batch)
+			for rowIdx := startRow; rowIdx < endRow; rowIdx++ {
+				// Extract parameters for this row
+				params := make([]interface{}, record.NumCols())
+				for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
+					arr := record.Column(colIdx)
+					value, err := s.extractArrowValue(arr, rowIdx)
+					if err != nil {
+						return totalAffected, s.Base().ErrorHelper.IO("failed to extract parameter value: %v", err)
+					}
+					params[colIdx] = value
 				}
-				params[colIdx] = value
-			}
 
-			// Execute with parameters
-			result, err := stmt.ExecContext(ctx, params...)
-			if err != nil {
-				return totalAffected, s.Base().ErrorHelper.IO("failed to execute statement: %v", err)
-			}
+				// Execute with parameters
+				result, err := stmt.ExecContext(ctx, params...)
+				if err != nil {
+					return totalAffected, s.Base().ErrorHelper.IO("failed to execute statement: %v", err)
+				}
 
-			affected, err := result.RowsAffected()
-			if err != nil {
-				return totalAffected, s.Base().ErrorHelper.IO("failed to get rows affected: %v", err)
+				affected, err := result.RowsAffected()
+				if err != nil {
+					return totalAffected, s.Base().ErrorHelper.IO("failed to get rows affected: %v", err)
+				}
+				totalAffected += affected
 			}
-			totalAffected += affected
 		}
 	}
 
