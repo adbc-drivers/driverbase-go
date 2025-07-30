@@ -140,24 +140,6 @@ func TestDriver(t *testing.T) {
 	err = stmt.Bind(context.Background(), emptyRec)
 	require.NoError(t, err)
 
-	// Test GetParameterSchema with no parameters
-	err = stmt.SetSqlQuery("SELECT COUNT(*) FROM adbc_test_driver")
-	require.NoError(t, err)
-
-	paramSchema, err := stmt.GetParameterSchema()
-	require.NoError(t, err)
-	require.Equal(t, 0, len(paramSchema.Fields()), "Query without parameters should have empty schema")
-
-	// Test GetParameterSchema with parameters
-	err = stmt.SetSqlQuery("SELECT * FROM adbc_test_driver WHERE id = ? AND val = ?")
-	require.NoError(t, err)
-
-	paramSchema, err = stmt.GetParameterSchema()
-	require.NoError(t, err)
-	require.Equal(t, 2, len(paramSchema.Fields()), "Query with 2 parameters should have 2 fields")
-	require.Equal(t, "param_0", paramSchema.Field(0).Name)
-	require.Equal(t, "param_1", paramSchema.Field(1).Name)
-
 	// Test ExecuteSchema
 	err = stmt.SetSqlQuery("SELECT id, val FROM adbc_test_driver")
 	require.NoError(t, err)
@@ -364,22 +346,22 @@ func TestSchemaMetadata(t *testing.T) {
 	// Check that each field has SQL metadata
 	for i, field := range schema.Fields() {
 		t.Logf("Field %d: %s (type: %s)", i, field.Name, field.Type.String())
-		
+
 		// Verify metadata exists
 		require.NotNil(t, field.Metadata, "Field should have metadata")
-		
+
 		// Check for SQL database type name
 		dbTypeName, ok := field.Metadata.GetValue("sql.database_type_name")
 		require.True(t, ok, "Should have sql.database_type_name metadata")
 		require.NotEmpty(t, dbTypeName, "Database type name should not be empty")
-		
+
 		t.Logf("  SQL database type: %s", dbTypeName)
-		
+
 		// Check for column name
 		colName, ok := field.Metadata.GetValue("sql.column_name")
 		require.True(t, ok, "Should have sql.column_name metadata")
 		require.Equal(t, field.Name, colName, "Column name in metadata should match field name")
-		
+
 		// Check type-specific metadata
 		switch field.Name {
 		case "name":
@@ -397,7 +379,7 @@ func TestSchemaMetadata(t *testing.T) {
 			}
 		}
 	}
-	
+
 	t.Log("✅ Schema metadata test passed successfully")
 }
 
@@ -447,29 +429,29 @@ func TestMySQLTypeConverter(t *testing.T) {
 	// Check MySQL-specific type enhancements
 	for i, field := range schema.Fields() {
 		t.Logf("Field %d: %s (type: %s)", i, field.Name, field.Type.String())
-		
+
 		// Verify metadata exists
 		require.NotNil(t, field.Metadata, "Field should have metadata")
-		
+
 		// Check for SQL database type name
 		dbTypeName, ok := field.Metadata.GetValue("sql.database_type_name")
 		require.True(t, ok, "Should have sql.database_type_name metadata")
 		t.Logf("  SQL database type: %s", dbTypeName)
-		
+
 		// Check MySQL-specific enhancements
 		switch field.Name {
 		case "data":
 			require.Equal(t, "JSON", dbTypeName, "Should be JSON type")
-			
+
 			// Check for MySQL JSON metadata
 			isJSON, ok := field.Metadata.GetValue("mysql.is_json")
 			require.True(t, ok, "Should have mysql.is_json metadata")
 			require.Equal(t, "true", isJSON, "Should be marked as JSON")
 			t.Logf("  MySQL JSON detected: %s", isJSON)
-			
+
 		case "status":
 			require.Equal(t, "ENUM", dbTypeName, "Should be ENUM type")
-			
+
 			// Check for MySQL ENUM metadata
 			isEnumSet, ok := field.Metadata.GetValue("mysql.is_enum_set")
 			require.True(t, ok, "Should have mysql.is_enum_set metadata")
@@ -477,7 +459,7 @@ func TestMySQLTypeConverter(t *testing.T) {
 			t.Logf("  MySQL ENUM detected: %s", isEnumSet)
 		}
 	}
-	
+
 	t.Log("✅ MySQL type converter test passed successfully")
 }
 
@@ -537,29 +519,29 @@ func TestDecimalTypeHandling(t *testing.T) {
 
 	for i, field := range schema.Fields() {
 		t.Logf("Field %d: %s (type: %s)", i, field.Name, field.Type.String())
-		
+
 		if expected, isDecimal := expectedDecimals[field.Name]; isDecimal {
 			// Verify it's a decimal type
 			decimalType, ok := field.Type.(*arrow.Decimal128Type)
 			require.True(t, ok, "Field %s should be Decimal128Type, got %T", field.Name, field.Type)
-			
+
 			// Verify precision and scale
 			require.Equal(t, expected.precision, decimalType.Precision, "Precision mismatch for %s", field.Name)
 			require.Equal(t, expected.scale, decimalType.Scale, "Scale mismatch for %s", field.Name)
-			
+
 			t.Logf("  Decimal(%d,%d) ✓", decimalType.Precision, decimalType.Scale)
-			
+
 			// Verify metadata includes precision and scale
 			precision, ok := field.Metadata.GetValue("sql.precision")
 			require.True(t, ok, "Should have sql.precision metadata")
 			require.Equal(t, fmt.Sprintf("%d", expected.precision), precision)
-			
+
 			scale, ok := field.Metadata.GetValue("sql.scale")
 			require.True(t, ok, "Should have sql.scale metadata")
 			require.Equal(t, fmt.Sprintf("%d", expected.scale), scale)
 		}
 	}
-	
+
 	t.Log("✅ Decimal type handling test passed successfully")
 }
 
@@ -622,20 +604,20 @@ func TestTimestampPrecisionHandling(t *testing.T) {
 
 	for i, field := range schema.Fields() {
 		t.Logf("Field %d: %s (type: %s)", i, field.Name, field.Type.String())
-		
+
 		if expectedType, isTimestamp := expectedTimestamps[field.Name]; isTimestamp {
 			// Verify the timestamp type matches expected precision
 			require.Equal(t, expectedType, field.Type.String(), "Timestamp unit mismatch for %s", field.Name)
-			
+
 			// Verify metadata includes fractional seconds precision (if available)
 			if precision, ok := field.Metadata.GetValue("sql.fractional_seconds_precision"); ok {
 				t.Logf("  Fractional seconds precision: %s", precision)
 			}
-			
+
 			t.Logf("  Expected: %s ✓", expectedType)
 		}
 	}
-	
+
 	t.Log("✅ Timestamp precision handling test passed successfully")
 }
 
@@ -739,7 +721,7 @@ func TestQueryBatchSizeConfiguration(t *testing.T) {
 			for reader.Next() {
 				record := reader.Record()
 				require.NotNil(t, record)
-				
+
 				batchRows := record.NumRows()
 				totalRows += batchRows
 				batchCount++
@@ -863,12 +845,12 @@ func TestTypedBuilderHandling(t *testing.T) {
 	// Verify schema field types
 	expectedTypes := map[string]string{
 		"id":            "int32",
-		"tiny_int":      "int8", 
+		"tiny_int":      "int8",
 		"small_int":     "int16",
 		"medium_int":    "int32",
 		"big_int":       "int64",
 		"float_val":     "float32",
-		"double_val":    "float64", 
+		"double_val":    "float64",
 		"varchar_val":   "utf8",
 		"text_val":      "utf8",
 		"bool_val":      "int8", // MySQL BOOLEAN is actually TINYINT
@@ -893,20 +875,20 @@ func TestTypedBuilderHandling(t *testing.T) {
 	for reader.Next() {
 		record := reader.Record()
 		require.NotNil(t, record)
-		
+
 		batchRows := record.NumRows()
 		totalRows += batchRows
 		batchCount++
-		
+
 		t.Logf("Batch %d: %d rows", batchCount, batchRows)
 
 		// Verify data types and values for each column
 		for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
 			field := schema.Field(colIdx)
 			column := record.Column(colIdx)
-			
+
 			t.Logf("  Column %s (%s): %d values", field.Name, field.Type.String(), column.Len())
-			
+
 			// Test a few specific values to ensure typed builders worked correctly
 			if batchCount == 1 && batchRows >= 2 { // First batch with at least 2 rows
 				switch field.Name {
@@ -914,30 +896,30 @@ func TestTypedBuilderHandling(t *testing.T) {
 					idCol := column.(*array.Int32)
 					require.Equal(t, int32(1), idCol.Value(0), "First ID should be 1")
 					require.Equal(t, int32(2), idCol.Value(1), "Second ID should be 2")
-					
+
 				case "tiny_int":
 					tinyCol := column.(*array.Int8)
 					require.Equal(t, int8(127), tinyCol.Value(0), "First tiny_int should be 127")
 					require.Equal(t, int8(-128), tinyCol.Value(1), "Second tiny_int should be -128")
-					
+
 				case "varchar_val":
 					strCol := column.(*array.String)
 					require.Equal(t, "test string", strCol.Value(0), "First varchar should match")
 					require.Equal(t, "another string", strCol.Value(1), "Second varchar should match")
-					
+
 				case "bool_val":
 					// MySQL BOOLEAN is actually TINYINT (int8)
 					boolCol := column.(*array.Int8)
 					require.Equal(t, int8(1), boolCol.Value(0), "First bool should be 1 (true)")
 					require.Equal(t, int8(0), boolCol.Value(1), "Second bool should be 0 (false)")
-					
+
 				case "decimal_val":
 					// Decimal fields should be properly typed
 					_, ok := column.(*array.Decimal128)
 					require.True(t, ok, "Decimal column should be Decimal128 type")
 				}
 			}
-			
+
 			// Test NULL handling for third row (if present)
 			if batchCount == 2 && batchRows >= 1 { // Second batch with NULL row
 				nullRowIdx := 0 // First row in second batch is the NULL row
@@ -1054,7 +1036,7 @@ func TestSQLNullableTypesHandling(t *testing.T) {
 			if totalRows > 1 && rowIdx == 1 {
 				for colIdx := 1; colIdx < int(record.NumCols()); colIdx++ {
 					col := record.Column(colIdx)
-					require.True(t, col.IsNull(int(rowIdx)), 
+					require.True(t, col.IsNull(int(rowIdx)),
 						"Column %d of row %d should be null", colIdx, rowIdx)
 				}
 				t.Log("✅ NULL values correctly handled")
@@ -1121,7 +1103,7 @@ func TestExtendedArrowArrayTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), affected, "Should insert 1 row")
 
-	// Query the data to test extended array type handling  
+	// Query the data to test extended array type handling
 	err = stmt.SetSqlQuery("SELECT * FROM adbc_test_extended_types")
 	require.NoError(t, err)
 
@@ -1142,7 +1124,7 @@ func TestExtendedArrowArrayTypes(t *testing.T) {
 		for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
 			col := record.Column(colIdx)
 			require.False(t, col.IsNull(0), "Column %d should not be null", colIdx)
-			
+
 			// Try to get the value from the array - this exercises our extractArrowValue logic
 			switch a := col.(type) {
 			case *array.String:
@@ -1233,7 +1215,7 @@ func TestTemporalAndDecimalExtraction(t *testing.T) {
 	for reader.Next() {
 		record := reader.Record()
 		require.NotNil(t, record, "Record should not be nil")
-		
+
 		rowsInBatch := int(record.NumRows())
 		totalRows += rowsInBatch
 
