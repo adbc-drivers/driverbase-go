@@ -71,13 +71,6 @@ func (m *MySQLTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.D
 	}
 }
 
-// init registers the MySQL type converter
-func init() {
-	sqlwrapper.RegisterTypeConverter("mysql", func() sqlwrapper.TypeConverter {
-		return &MySQLTypeConverter{DefaultTypeConverter: &sqlwrapper.DefaultTypeConverter{}}
-	})
-}
-
 // Driver wraps the sqlwrapper.Driver with MySQL-specific type conversion.
 type Driver struct {
 	*sqlwrapper.Driver
@@ -85,14 +78,11 @@ type Driver struct {
 
 // NewDriver constructs the ADBC Driver for "mysql".
 func NewDriver() adbc.Driver {
-	// Register MySQL type converter
-	sqlwrapper.RegisterTypeConverter("mysql", func() sqlwrapper.TypeConverter {
-		return &MySQLTypeConverter{}
-	})
-
 	// Create sqlwrapper driver with MySQL type converter
 	return &Driver{
-		Driver: sqlwrapper.NewDriverWithTypeConverter(&MySQLTypeConverter{}),
+		Driver: sqlwrapper.NewDriverWithTypeConverter(&MySQLTypeConverter{
+			DefaultTypeConverter: &sqlwrapper.DefaultTypeConverter{},
+		}),
 	}
 }
 
@@ -104,14 +94,6 @@ func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
 
 // NewDatabaseWithContext implements adbc.Driver interface with context.
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	// ensure the URI is present
-	if _, ok := opts[adbc.OptionKeyURI]; !ok {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  fmt.Sprintf("mysql: missing option %q", adbc.OptionKeyURI),
-		}
-	}
-
 	// copy and inject the driver name
 	m := maps.Clone(opts)
 	m["driver"] = "mysql"
