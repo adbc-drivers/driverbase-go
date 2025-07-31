@@ -10,11 +10,9 @@ import (
 	// 1) register the "mysql" driver with database/sql
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/adbc-drivers/driverbase-go/driverbase"
 	sqlwrapper "github.com/adbc-drivers/driverbase-go/sql"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // MySQLTypeConverter provides MySQL-specific type conversion enhancements
@@ -25,42 +23,48 @@ type MySQLTypeConverter struct {
 // ConvertColumnType implements TypeConverter with MySQL-specific enhancements
 func (m *MySQLTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.DataType, bool, arrow.Metadata, error) {
 	typeName := strings.ToUpper(colType.DatabaseTypeName())
-	
+
 	switch typeName {
 	case "JSON":
 		// Convert MySQL JSON to Arrow string with special metadata
-		keys := []string{"sql.database_type_name", "sql.column_name", "mysql.is_json"}
-		values := []string{colType.DatabaseTypeName(), colType.Name(), "true"}
-		
+		metadataMap := map[string]string{
+			"sql.database_type_name": colType.DatabaseTypeName(),
+			"sql.column_name":        colType.Name(),
+			"mysql.is_json":          "true",
+		}
+
 		// Add length if available
 		if length, ok := colType.Length(); ok {
-			keys = append(keys, "sql.length")
-			values = append(values, fmt.Sprintf("%d", length))
+			metadataMap["sql.length"] = fmt.Sprintf("%d", length)
 		}
-		
-		metadata := arrow.NewMetadata(keys, values)
+
+		metadata := arrow.MetadataFrom(metadataMap)
 		return arrow.BinaryTypes.String, true, metadata, nil
-		
+
 	case "GEOMETRY", "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON":
 		// Convert MySQL spatial types to binary with spatial metadata
-		keys := []string{"sql.database_type_name", "sql.column_name", "mysql.is_spatial"}
-		values := []string{colType.DatabaseTypeName(), colType.Name(), "true"}
-		metadata := arrow.NewMetadata(keys, values)
+		metadata := arrow.MetadataFrom(map[string]string{
+			"sql.database_type_name": colType.DatabaseTypeName(),
+			"sql.column_name":        colType.Name(),
+			"mysql.is_spatial":       "true",
+		})
 		return arrow.BinaryTypes.Binary, true, metadata, nil
-		
+
 	case "ENUM", "SET":
 		// Handle ENUM/SET as string with special metadata
-		keys := []string{"sql.database_type_name", "sql.column_name", "mysql.is_enum_set"}
-		values := []string{colType.DatabaseTypeName(), colType.Name(), "true"}
-		
-		if length, ok := colType.Length(); ok {
-			keys = append(keys, "sql.length")
-			values = append(values, fmt.Sprintf("%d", length))
+		metadataMap := map[string]string{
+			"sql.database_type_name": colType.DatabaseTypeName(),
+			"sql.column_name":        colType.Name(),
+			"mysql.is_enum_set":      "true",
 		}
-		
-		metadata := arrow.NewMetadata(keys, values)
+
+		if length, ok := colType.Length(); ok {
+			metadataMap["sql.length"] = fmt.Sprintf("%d", length)
+		}
+
+		metadata := arrow.MetadataFrom(metadataMap)
 		return arrow.BinaryTypes.String, true, metadata, nil
-		
+
 	default:
 		// Fall back to default conversion for standard types
 		return m.DefaultTypeConverter.ConvertColumnType(colType)
@@ -74,16 +78,22 @@ func init() {
 	})
 }
 
-// Driver wraps the driverbase plumbing for MySQL.
+// Driver wraps the sqlwrapper.Driver with MySQL-specific type conversion.
 type Driver struct {
-	driverbase.DriverImplBase
+	*sqlwrapper.Driver
 }
 
 // NewDriver constructs the ADBC Driver for "mysql".
 func NewDriver() adbc.Driver {
-	info := driverbase.DefaultDriverInfo("mysql")
-	base := driverbase.NewDriverImplBase(info, memory.DefaultAllocator)
-	return &Driver{DriverImplBase: base}
+	// Register MySQL type converter
+	sqlwrapper.RegisterTypeConverter("mysql", func() sqlwrapper.TypeConverter {
+		return &MySQLTypeConverter{}
+	})
+
+	// Create sqlwrapper driver with MySQL type converter
+	return &Driver{
+		Driver: sqlwrapper.NewDriverWithTypeConverter(&MySQLTypeConverter{}),
+	}
 }
 
 // NewDatabase implements adbc.Driver interface.
@@ -106,39 +116,6 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 	m := maps.Clone(opts)
 	m["driver"] = "mysql"
 
-	// hand off to the core sql-wrapper
-	sqlDB, err := sqlwrapper.Driver{}.NewDatabaseWithContext(ctx, m)
-	if err != nil {
-		return nil, err
-	}
-
-	// Wrap the database to automatically set MySQL type converter
-	return &mysqlDatabase{Database: sqlDB}, nil
-}
-
-// mysqlDatabase wraps the sql-wrapper database to provide MySQL-specific enhancements
-type mysqlDatabase struct {
-	adbc.Database
-}
-
-// Open wraps the sql-wrapper connection and sets the MySQL type converter
-func (db *mysqlDatabase) Open(ctx context.Context) (adbc.Connection, error) {
-	conn, err := db.Database.Open(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set MySQL type converter using the ADBC standard way
-	if optionSetter, ok := conn.(adbc.PostInitOptions); ok {
-		err = optionSetter.SetOption(sqlwrapper.OptionKeyTypeConverter, "mysql")
-		if err != nil {
-			conn.Close()
-			return nil, adbc.Error{
-				Code: adbc.StatusInternal,
-				Msg:  fmt.Sprintf("failed to set MySQL type converter: %v", err),
-			}
-		}
-	}
-
-	return conn, nil
+	// delegate to the wrapped sqlwrapper driver (which already has the MySQL type converter)
+	return d.Driver.NewDatabaseWithContext(ctx, m)
 }

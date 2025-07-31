@@ -1,4 +1,4 @@
-package sql
+package sqlwrapper
 
 import (
 	"context"
@@ -31,7 +31,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 	impl := &connectionImpl{
 		ConnectionImplBase: base,
 		conn:               sqlConn,
-		typeConverter:      &DefaultTypeConverter{}, // Use default converter, can be overridden by drivers
+		typeConverter:      db.typeConverter, // Use the type converter from the database
 	}
 
 	// Build and return the ADBC Connection wrapper

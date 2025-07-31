@@ -1,4 +1,4 @@
-package sql
+package sqlwrapper
 
 import (
 	"context"
@@ -16,10 +16,12 @@ type databaseImpl struct {
 
 	// db is the Go SQL handle (connection pool)
 	db *sql.DB
+	// typeConverter handles SQL-to-Arrow type conversion
+	typeConverter TypeConverter
 }
 
 // newDatabase constructs a new ADBC Database backed by *sql.DB.
-func newDatabase(ctx context.Context, opts map[string]string) (adbc.Database, error) {
+func newDatabase(ctx context.Context, opts map[string]string, typeConverter TypeConverter) (adbc.Database, error) {
 	drvName, ok := opts["driver"]
 	if !ok {
 		return nil, adbc.Error{
@@ -59,6 +61,7 @@ func newDatabase(ctx context.Context, opts map[string]string) (adbc.Database, er
 	db := &databaseImpl{
 		DatabaseImplBase: base,
 		db:               sqlDB,
+		typeConverter:    typeConverter,
 	}
 	return driverbase.NewDatabase(db), nil
 }

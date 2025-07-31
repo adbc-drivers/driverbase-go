@@ -1,4 +1,4 @@
-module github.com/adbc-drivers/driverbase-go/sql
+module github.com/adbc-drivers/driverbase-go/sqlwrapper
 
 go 1.24.4
 

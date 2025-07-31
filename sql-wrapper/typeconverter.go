@@ -1,4 +1,4 @@
-package sql
+package sqlwrapper
 
 import (
 	"database/sql"
@@ -65,9 +65,12 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 			arrowType := &arrow.Decimal128Type{Precision: int32(precision), Scale: int32(scale)}
 
 			// Build metadata with decimal information
-			keys := []string{"sql.database_type_name", "sql.column_name", "sql.precision", "sql.scale"}
-			values := []string{colType.DatabaseTypeName(), colType.Name(), fmt.Sprintf("%d", precision), fmt.Sprintf("%d", scale)}
-			metadata := arrow.NewMetadata(keys, values)
+			metadata := arrow.MetadataFrom(map[string]string{
+				"sql.database_type_name": colType.DatabaseTypeName(),
+				"sql.column_name":        colType.Name(),
+				"sql.precision":          fmt.Sprintf("%d", precision),
+				"sql.scale":              fmt.Sprintf("%d", scale),
+			})
 
 			return arrowType, nullable, metadata, nil
 		}
@@ -78,13 +81,14 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 	if typeName == "DATETIME" || typeName == "TIMESTAMP" {
 		// Try to get precision from DecimalSize (which represents fractional seconds precision)
 		var timestampType arrow.DataType
-		keys := []string{"sql.database_type_name", "sql.column_name"}
-		values := []string{colType.DatabaseTypeName(), colType.Name()}
+		metadataMap := map[string]string{
+			"sql.database_type_name": colType.DatabaseTypeName(),
+			"sql.column_name":        colType.Name(),
+		}
 
 		if precision, _, ok := colType.DecimalSize(); ok {
-			// precision represents fractional seconds digits (0-6)
-			keys = append(keys, "sql.fractional_seconds_precision")
-			values = append(values, fmt.Sprintf("%d", precision))
+			// precision represents fractional seconds digits (0-9)
+			metadataMap["sql.fractional_seconds_precision"] = fmt.Sprintf("%d", precision)
 
 			switch precision {
 			case 0:
@@ -96,16 +100,19 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 			case 4, 5, 6:
 				// 4-6 digits: microseconds precision
 				timestampType = arrow.FixedWidthTypes.Timestamp_us
+			case 7, 8, 9:
+				// 7-9 digits: nanoseconds precision
+				timestampType = arrow.FixedWidthTypes.Timestamp_ns
 			default:
-				// Fallback to microseconds for unexpected values
-				timestampType = arrow.FixedWidthTypes.Timestamp_us
+				// Fallback to nanoseconds for unexpected values
+				timestampType = arrow.FixedWidthTypes.Timestamp_ns
 			}
 		} else {
 			// No precision info available, default to microseconds (most common)
 			timestampType = arrow.FixedWidthTypes.Timestamp_us
 		}
 
-		metadata := arrow.NewMetadata(keys, values)
+		metadata := arrow.MetadataFrom(metadataMap)
 		return timestampType, nullable, metadata, nil
 	}
 
@@ -113,13 +120,14 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 	if typeName == "TIME" {
 		// Try to get precision from DecimalSize (which represents fractional seconds precision)
 		var timeType arrow.DataType
-		keys := []string{"sql.database_type_name", "sql.column_name"}
-		values := []string{colType.DatabaseTypeName(), colType.Name()}
+		metadataMap := map[string]string{
+			"sql.database_type_name": colType.DatabaseTypeName(),
+			"sql.column_name":        colType.Name(),
+		}
 
 		if precision, _, ok := colType.DecimalSize(); ok {
-			// precision represents fractional seconds digits (0-6)
-			keys = append(keys, "sql.fractional_seconds_precision")
-			values = append(values, fmt.Sprintf("%d", precision))
+			// precision represents fractional seconds digits (0-9)
+			metadataMap["sql.fractional_seconds_precision"] = fmt.Sprintf("%d", precision)
 
 			switch precision {
 			case 0:
@@ -131,16 +139,19 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 			case 4, 5, 6:
 				// 4-6 digits: microseconds precision
 				timeType = arrow.FixedWidthTypes.Time64us
+			case 7, 8, 9:
+				// 7-9 digits: nanoseconds precision
+				timeType = arrow.FixedWidthTypes.Time64ns
 			default:
-				// Fallback to microseconds for unexpected values
-				timeType = arrow.FixedWidthTypes.Time64us
+				// Fallback to nanoseconds for unexpected values
+				timeType = arrow.FixedWidthTypes.Time64ns
 			}
 		} else {
 			// No precision info available, default to microseconds (most common)
 			timeType = arrow.FixedWidthTypes.Time64us
 		}
 
-		metadata := arrow.NewMetadata(keys, values)
+		metadata := arrow.MetadataFrom(metadataMap)
 		return timeType, nullable, metadata, nil
 	}
 
@@ -148,22 +159,23 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 	arrowType, nullable := sqlTypeToArrow(colType)
 
 	// Build metadata with original SQL type information
-	keys := []string{"sql.database_type_name", "sql.column_name"}
-	values := []string{colType.DatabaseTypeName(), colType.Name()}
+	metadataMap := map[string]string{
+		"sql.database_type_name": colType.DatabaseTypeName(),
+		"sql.column_name":        colType.Name(),
+	}
 
 	// Add additional metadata if available
 	if length, ok := colType.Length(); ok {
-		keys = append(keys, "sql.length")
-		values = append(values, fmt.Sprintf("%d", length))
+		metadataMap["sql.length"] = fmt.Sprintf("%d", length)
 	}
 
 	if precision, scale, ok := colType.DecimalSize(); ok {
-		keys = append(keys, "sql.precision", "sql.scale")
-		values = append(values, fmt.Sprintf("%d", precision), fmt.Sprintf("%d", scale))
+		metadataMap["sql.precision"] = fmt.Sprintf("%d", precision)
+		metadataMap["sql.scale"] = fmt.Sprintf("%d", scale)
 	}
 
 	// Create metadata with all collected information
-	metadata := arrow.NewMetadata(keys, values)
+	metadata := arrow.MetadataFrom(metadataMap)
 
 	return arrowType, nullable, metadata, nil
 }
