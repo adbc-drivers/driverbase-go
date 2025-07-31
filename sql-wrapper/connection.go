@@ -51,17 +51,7 @@ func (c *connectionImpl) SetTypeConverter(converter TypeConverter) {
 
 // SetOption sets a string option on this connection
 func (c *connectionImpl) SetOption(key, value string) error {
-	switch key {
-	case OptionKeyTypeConverter:
-		converter, exists := GetTypeConverter(value)
-		if !exists {
-			return c.Base().ErrorHelper.InvalidArgument("unknown type converter: %s", value)
-		}
-		c.SetTypeConverter(converter)
-		return nil
-	default:
-		return c.Base().ErrorHelper.NotImplemented("unsupported option: %s", key)
-	}
+	return c.Base().ErrorHelper.NotImplemented("unsupported option: %s", key)
 }
 
 // Commit is a no-op under auto-commit mode

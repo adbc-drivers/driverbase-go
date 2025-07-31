@@ -255,7 +255,7 @@ func appendToInt8Builder(b *array.Int8Builder, val interface{}) error {
 		}
 		val = v.Int64
 	}
-	
+
 	// Direct type conversions
 	if v, ok := val.(int8); ok {
 		b.Append(v)
@@ -298,7 +298,7 @@ func appendToInt16Builder(b *array.Int16Builder, val interface{}) error {
 		}
 		val = v.Int64
 	}
-	
+
 	if v, ok := val.(int16); ok {
 		b.Append(v)
 		return nil
@@ -340,7 +340,7 @@ func appendToInt32Builder(b *array.Int32Builder, val interface{}) error {
 		}
 		val = v.Int16
 	}
-	
+
 	if v, ok := val.(int32); ok {
 		b.Append(v)
 		return nil
@@ -386,7 +386,7 @@ func appendToInt64Builder(b *array.Int64Builder, val interface{}) error {
 		}
 		val = v.Int16
 	}
-	
+
 	if v, ok := val.(int64); ok {
 		b.Append(v)
 		return nil
@@ -420,7 +420,7 @@ func appendToUint8Builder(b *array.Uint8Builder, val interface{}) error {
 		}
 		val = v.Byte
 	}
-	
+
 	if v, ok := val.(uint8); ok {
 		b.Append(v)
 		return nil
@@ -478,7 +478,7 @@ func appendToFloat32Builder(b *array.Float32Builder, val interface{}) error {
 		}
 		val = v.Float64
 	}
-	
+
 	if v, ok := val.(float32); ok {
 		b.Append(v)
 		return nil
@@ -500,7 +500,7 @@ func appendToFloat64Builder(b *array.Float64Builder, val interface{}) error {
 		}
 		val = v.Float64
 	}
-	
+
 	if v, ok := val.(float64); ok {
 		b.Append(v)
 		return nil
@@ -522,7 +522,7 @@ func appendToBooleanBuilder(b *array.BooleanBuilder, val interface{}) error {
 		}
 		val = v.Bool
 	}
-	
+
 	if v, ok := val.(bool); ok {
 		b.Append(v)
 		return nil
@@ -540,7 +540,7 @@ func appendToStringBuilder(b *array.StringBuilder, val interface{}) error {
 		}
 		val = v.String
 	}
-	
+
 	if v, ok := val.(string); ok {
 		b.Append(v)
 		return nil
@@ -562,7 +562,7 @@ func appendToLargeStringBuilder(b *array.LargeStringBuilder, val interface{}) er
 		}
 		val = v.String
 	}
-	
+
 	if v, ok := val.(string); ok {
 		b.Append(v)
 		return nil
@@ -584,7 +584,7 @@ func appendToStringViewBuilder(b *array.StringViewBuilder, val interface{}) erro
 		}
 		val = v.String
 	}
-	
+
 	if v, ok := val.(string); ok {
 		b.Append(v)
 		return nil
@@ -638,7 +638,7 @@ func appendToDate32Builder(b *array.Date32Builder, val interface{}) error {
 		}
 		val = v.Time
 	}
-	
+
 	if v, ok := val.(time.Time); ok {
 		// Convert time.Time to days since epoch
 		days := int32(v.Unix() / (24 * 3600))
@@ -667,7 +667,7 @@ func appendToDate64Builder(b *array.Date64Builder, val interface{}) error {
 		}
 		val = v.Time
 	}
-	
+
 	if v, ok := val.(time.Time); ok {
 		// Convert time.Time to milliseconds since epoch
 		millis := v.UnixMilli()
@@ -696,7 +696,7 @@ func appendToTime32Builder(b *array.Time32Builder, val interface{}) error {
 		}
 		val = v.Time
 	}
-	
+
 	if v, ok := val.(time.Time); ok {
 		// Extract time of day and convert based on unit
 		timeType := b.Type().(*arrow.Time32Type)
@@ -732,7 +732,7 @@ func appendToTime64Builder(b *array.Time64Builder, val interface{}) error {
 		}
 		val = v.Time
 	}
-	
+
 	if v, ok := val.(time.Time); ok {
 		// Extract time of day and convert based on unit
 		timeType := b.Type().(*arrow.Time64Type)
@@ -768,7 +768,7 @@ func appendToTimestampBuilder(b *array.TimestampBuilder, val interface{}) error 
 		}
 		val = v.Time
 	}
-	
+
 	if v, ok := val.(time.Time); ok {
 		// Convert time.Time to timestamp based on unit, but be careful about precision
 		timestampType := b.Type().(*arrow.TimestampType)

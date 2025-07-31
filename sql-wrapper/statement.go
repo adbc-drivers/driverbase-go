@@ -355,7 +355,8 @@ func (s *statementImpl) extractArrowValue(arr arrow.Array, index int) (interface
 		return a.Value(index), nil
 	case *array.FixedSizeBinary:
 		return a.Value(index), nil
-	// Note: LargeBinary doesn't exist in Arrow Go v18 yet, similar pattern as LargeBinaryBuilder
+	case *array.LargeBinary:
+		return a.Value(index), nil
 
 	// Date/Time types - convert to time.Time
 	case *array.Date32:
@@ -408,12 +409,14 @@ func (s *statementImpl) extractArrowValue(arr arrow.Array, index int) (interface
 		}
 
 	// Decimal types - use string representation
+	case *array.Decimal32:
+		return a.ValueStr(index), nil
+	case *array.Decimal64:
+		return a.ValueStr(index), nil
 	case *array.Decimal128:
 		return a.ValueStr(index), nil
 	case *array.Decimal256:
 		return a.ValueStr(index), nil
-	// Note: Arrow Go v18 doesn't have Decimal32/Decimal64 array types yet
-	// They would be handled here when available
 
 	// Fallback for any unhandled array types
 	default:

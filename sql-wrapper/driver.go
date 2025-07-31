@@ -11,15 +11,12 @@ type Driver struct {
 	typeConverter TypeConverter
 }
 
-// NewDriver creates a new sqlwrapper Driver with the default type converter
-func NewDriver() *Driver {
-	return &Driver{
-		typeConverter: &DefaultTypeConverter{},
+// NewDriver creates a new sqlwrapper Driver with optional type converter.
+// If converter is nil, uses DefaultTypeConverter.
+func NewDriver(converter TypeConverter) *Driver {
+	if converter == nil {
+		converter = &DefaultTypeConverter{}
 	}
-}
-
-// NewDriverWithTypeConverter creates a new sqlwrapper Driver with a custom type converter
-func NewDriverWithTypeConverter(converter TypeConverter) *Driver {
 	return &Driver{
 		typeConverter: converter,
 	}

@@ -4,16 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/extensions"
-)
-
-// Custom option keys for type conversion
-const (
-	// OptionKeyTypeConverter sets the type converter for SQL-to-Arrow conversion
-	OptionKeyTypeConverter = "adbc.sqlwrapper.type_converter"
 )
 
 // TypeConverter allows higher-level drivers to customize SQL-to-Arrow type conversion
@@ -25,33 +18,6 @@ type TypeConverter interface {
 
 // DefaultTypeConverter provides the default SQL-to-Arrow type conversion
 type DefaultTypeConverter struct{}
-
-// TypeConverterRegistry manages registered type converters
-var (
-	typeConverterRegistry = map[string]func() TypeConverter{
-		"default": func() TypeConverter { return &DefaultTypeConverter{} },
-	}
-	typeConverterMutex sync.RWMutex
-)
-
-// RegisterTypeConverter registers a type converter factory function with a name
-func RegisterTypeConverter(name string, factory func() TypeConverter) {
-	typeConverterMutex.Lock()
-	defer typeConverterMutex.Unlock()
-	typeConverterRegistry[name] = factory
-}
-
-// GetTypeConverter retrieves a type converter by name
-func GetTypeConverter(name string) (TypeConverter, bool) {
-	typeConverterMutex.RLock()
-	factory, exists := typeConverterRegistry[name]
-	typeConverterMutex.RUnlock()
-
-	if !exists {
-		return nil, false
-	}
-	return factory(), true
-}
 
 // ConvertColumnType implements TypeConverter interface with the default conversion logic
 func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.DataType, bool, arrow.Metadata, error) {
@@ -155,8 +121,8 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 		return timeType, nullable, metadata, nil
 	}
 
-	// For all other types, use the existing conversion
-	arrowType, nullable := sqlTypeToArrow(colType)
+	// For all other types, use the existing conversion with already-parsed values
+	arrowType := sqlTypeToArrow(typeName, nullable)
 
 	// Build metadata with original SQL type information
 	metadataMap := map[string]string{
@@ -180,63 +146,59 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 	return arrowType, nullable, metadata, nil
 }
 
-// sqlTypeToArrow converts SQL column type to Arrow data type
-func sqlTypeToArrow(colType *sql.ColumnType) (arrow.DataType, bool) {
-	nullable, _ := colType.Nullable()
-
-	// Get the database type name (e.g., "VARCHAR", "INT", etc.)
-	typeName := strings.ToUpper(colType.DatabaseTypeName())
+// sqlTypeToArrow converts SQL type name to Arrow data type using pre-parsed values
+func sqlTypeToArrow(typeName string, nullable bool) arrow.DataType {
 
 	switch typeName {
 	// Integer types
 	case "INT", "INTEGER", "MEDIUMINT":
-		return arrow.PrimitiveTypes.Int32, nullable
+		return arrow.PrimitiveTypes.Int32
 	case "BIGINT":
-		return arrow.PrimitiveTypes.Int64, nullable
+		return arrow.PrimitiveTypes.Int64
 	case "SMALLINT":
-		return arrow.PrimitiveTypes.Int16, nullable
+		return arrow.PrimitiveTypes.Int16
 	case "TINYINT":
-		return arrow.PrimitiveTypes.Int8, nullable
+		return arrow.PrimitiveTypes.Int8
 
 	// Unsigned integer types
 	case "INT UNSIGNED", "INTEGER UNSIGNED", "MEDIUMINT UNSIGNED":
-		return arrow.PrimitiveTypes.Uint32, nullable
+		return arrow.PrimitiveTypes.Uint32
 	case "BIGINT UNSIGNED":
-		return arrow.PrimitiveTypes.Uint64, nullable
+		return arrow.PrimitiveTypes.Uint64
 	case "SMALLINT UNSIGNED":
-		return arrow.PrimitiveTypes.Uint16, nullable
+		return arrow.PrimitiveTypes.Uint16
 	case "TINYINT UNSIGNED":
-		return arrow.PrimitiveTypes.Uint8, nullable
+		return arrow.PrimitiveTypes.Uint8
 
 	// Floating point types
 	case "FLOAT":
-		return arrow.PrimitiveTypes.Float32, nullable
+		return arrow.PrimitiveTypes.Float32
 	case "DOUBLE", "DOUBLE PRECISION":
-		return arrow.PrimitiveTypes.Float64, nullable
+		return arrow.PrimitiveTypes.Float64
 
 	// String types
 	case "CHAR", "VARCHAR", "TEXT", "MEDIUMTEXT", "LONGTEXT", "TINYTEXT":
-		return arrow.BinaryTypes.String, nullable
+		return arrow.BinaryTypes.String
 
 	// Binary types
 	case "BINARY", "VARBINARY", "BLOB", "MEDIUMBLOB", "LONGBLOB", "TINYBLOB":
-		return arrow.BinaryTypes.Binary, nullable
+		return arrow.BinaryTypes.Binary
 
 	// Date/time types
 	case "DATE":
-		return arrow.FixedWidthTypes.Date32, nullable
+		return arrow.FixedWidthTypes.Date32
 
 	// Boolean type
 	case "BOOLEAN", "BOOL":
-		return arrow.FixedWidthTypes.Boolean, nullable
+		return arrow.FixedWidthTypes.Boolean
 
 	// JSON type
 	case "JSON":
 		jsonType, _ := extensions.NewJSONType(arrow.BinaryTypes.String)
-		return jsonType, nullable
+		return jsonType
 
 	// Default to string for unknown types
 	default:
-		return arrow.BinaryTypes.String, nullable
+		return arrow.BinaryTypes.String
 	}
 }

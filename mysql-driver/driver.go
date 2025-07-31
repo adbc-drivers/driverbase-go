@@ -80,7 +80,7 @@ type Driver struct {
 func NewDriver() adbc.Driver {
 	// Create sqlwrapper driver with MySQL type converter
 	return &Driver{
-		Driver: sqlwrapper.NewDriverWithTypeConverter(&MySQLTypeConverter{
+		Driver: sqlwrapper.NewDriver(&MySQLTypeConverter{
 			DefaultTypeConverter: &sqlwrapper.DefaultTypeConverter{},
 		}),
 	}
