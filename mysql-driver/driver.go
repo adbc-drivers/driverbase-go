@@ -1,13 +1,11 @@
 package mysql
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
-	"maps"
 	"strings"
 
-	// 1) register the "mysql" driver with database/sql
+	// register the "mysql" driver with database/sql
 	_ "github.com/go-sql-driver/mysql"
 
 	sqlwrapper "github.com/adbc-drivers/driverbase-go/sql"
@@ -71,33 +69,10 @@ func (m *MySQLTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.D
 	}
 }
 
-// Driver wraps the sqlwrapper.Driver with MySQL-specific type conversion.
-type Driver struct {
-	*sqlwrapper.Driver
-}
-
 // NewDriver constructs the ADBC Driver for "mysql".
 func NewDriver() adbc.Driver {
-	// Create sqlwrapper driver with MySQL type converter
-	return &Driver{
-		Driver: sqlwrapper.NewDriver(&MySQLTypeConverter{
-			DefaultTypeConverter: &sqlwrapper.DefaultTypeConverter{},
-		}),
-	}
-}
-
-// NewDatabase implements adbc.Driver interface.
-// It injects opts["driver"]="mysql" and delegates to sql-wrapper.
-func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
-	return d.NewDatabaseWithContext(context.Background(), opts)
-}
-
-// NewDatabaseWithContext implements adbc.Driver interface with context.
-func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	// copy and inject the driver name
-	m := maps.Clone(opts)
-	m["driver"] = "mysql"
-
-	// delegate to the wrapped sqlwrapper driver (which already has the MySQL type converter)
-	return d.Driver.NewDatabaseWithContext(ctx, m)
+	// Create sqlwrapper driver with MySQL type converter and driver name
+	return sqlwrapper.NewDriver("mysql", &MySQLTypeConverter{
+		DefaultTypeConverter: &sqlwrapper.DefaultTypeConverter{},
+	})
 }

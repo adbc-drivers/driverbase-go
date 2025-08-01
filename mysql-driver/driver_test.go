@@ -1,8 +1,11 @@
-package mysql
+package mysql_test
+
+// TODO: leverage Go validation suite for more comprehensive testing
 
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"testing"
 
@@ -11,89 +14,46 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/stretchr/testify/require"
+	
+	mysql "mysql"
 )
 
 // getDSN returns the MySQL DSN for testing, using environment variable or default
 func getDSN() string {
 	// You can set MYSQL_DSN environment variable for custom connection
 	// Default assumes local MySQL with root/password setup
+	if dsn := os.Getenv("MYSQL_DSN"); dsn != "" {
+		return dsn
+	}
 	return "root:password@tcp(localhost:3306)/mysql"
 }
 
-// testRecordReader is a simple RecordReader for testing BindStream
-type testRecordReader struct {
-	schema        *arrow.Schema
-	batches       [][]string
-	currentBatch  int
-	currentRecord arrow.Record
-	allocator     memory.Allocator
-	done          bool
-}
+// Helper function to create Arrow records from string data
+func createTestRecords(allocator memory.Allocator, schema *arrow.Schema, batches [][]string) []arrow.Record {
+	records := make([]arrow.Record, len(batches))
+	
+	for i, batch := range batches {
+		// Build string array for this batch
+		builder := array.NewStringBuilder(allocator)
+		defer builder.Release()
 
-func (t *testRecordReader) Schema() *arrow.Schema {
-	return t.schema
-}
+		for _, value := range batch {
+			builder.Append(value)
+		}
+		stringArray := builder.NewArray()
+		defer stringArray.Release()
 
-func (t *testRecordReader) Next() bool {
-	if t.done || t.currentBatch >= len(t.batches) {
-		return false
+		// Create record for this batch
+		records[i] = array.NewRecord(schema, []arrow.Array{stringArray}, int64(len(batch)))
 	}
-
-	// Release previous record
-	if t.currentRecord != nil {
-		t.currentRecord.Release()
-		t.currentRecord = nil
-	}
-
-	// Create record for current batch
-	batch := t.batches[t.currentBatch]
-
-	// Build string array
-	builder := array.NewStringBuilder(t.allocator)
-	defer builder.Release()
-
-	for _, value := range batch {
-		builder.Append(value)
-	}
-	stringArray := builder.NewArray()
-	defer stringArray.Release()
-
-	// Create record
-	t.currentRecord = array.NewRecord(t.schema, []arrow.Array{stringArray}, int64(len(batch)))
-
-	t.currentBatch++
-
-	// Check if we're done
-	if t.currentBatch >= len(t.batches) {
-		t.done = true
-	}
-
-	return true
-}
-
-func (t *testRecordReader) Record() arrow.Record {
-	return t.currentRecord
-}
-
-func (t *testRecordReader) Err() error {
-	return nil
-}
-
-func (t *testRecordReader) Release() {
-	if t.currentRecord != nil {
-		t.currentRecord.Release()
-		t.currentRecord = nil
-	}
-}
-
-func (t *testRecordReader) Retain() {
-	// No-op for this test implementation
+	
+	return records
 }
 
 func TestDriver(t *testing.T) {
-	dsn := "root:password@tcp(localhost:3306)/mysql"
+	dsn := getDSN()
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -253,18 +213,28 @@ func TestDriver(t *testing.T) {
 	err = stmt.SetSqlQuery("INSERT INTO adbc_test_driver (val) VALUES (?)")
 	require.NoError(t, err)
 
-	// Create a simple RecordReader that produces multiple batches
-	streamReader := &testRecordReader{
-		schema: arrow.NewSchema([]arrow.Field{
-			{Name: "val", Type: arrow.BinaryTypes.String, Nullable: false},
-		}, nil),
-		batches: [][]string{
-			{"cherry", "peach"},    // First batch: 2 rows
-			{"mango", "pineapple"}, // Second batch: 2 rows
-		},
-		currentBatch: 0,
-		allocator:    allocator,
+	// Create test data and schema
+	streamSchema := arrow.NewSchema([]arrow.Field{
+		{Name: "val", Type: arrow.BinaryTypes.String, Nullable: false},
+	}, nil)
+	
+	batches := [][]string{
+		{"cherry", "peach"},    // First batch: 2 rows
+		{"mango", "pineapple"}, // Second batch: 2 rows
 	}
+	
+	// Create Arrow records using helper function
+	testRecords := createTestRecords(allocator, streamSchema, batches)
+	defer func() {
+		for _, rec := range testRecords {
+			rec.Release()
+		}
+	}()
+	
+	// Use Arrow's built-in RecordReader
+	streamReader, err := array.NewRecordReader(streamSchema, testRecords)
+	require.NoError(t, err)
+	defer streamReader.Release()
 
 	// Use BindStream
 	err = stmt.BindStream(context.Background(), streamReader)
@@ -301,9 +271,9 @@ func TestDriver(t *testing.T) {
 
 // TestSchemaMetadata tests that SQL type metadata is included in Arrow schema
 func TestSchemaMetadata(t *testing.T) {
-	dsn := "root:password@tcp(localhost:3306)/mysql"
+	dsn := getDSN()
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -385,9 +355,9 @@ func TestSchemaMetadata(t *testing.T) {
 
 // TestMySQLTypeConverter tests MySQL-specific type converter enhancements
 func TestMySQLTypeConverter(t *testing.T) {
-	dsn := "root:password@tcp(localhost:3306)/mysql"
+	dsn := getDSN()
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -465,9 +435,9 @@ func TestMySQLTypeConverter(t *testing.T) {
 
 // TestDecimalTypeHandling tests that DECIMAL types are properly converted to Arrow Decimal128
 func TestDecimalTypeHandling(t *testing.T) {
-	dsn := "root:password@tcp(localhost:3306)/mysql"
+	dsn := getDSN()
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -547,9 +517,9 @@ func TestDecimalTypeHandling(t *testing.T) {
 
 // TestTimestampPrecisionHandling tests that TIMESTAMP/DATETIME types use correct Arrow timestamp units
 func TestTimestampPrecisionHandling(t *testing.T) {
-	dsn := "root:password@tcp(localhost:3306)/mysql"
+	dsn := getDSN()
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -623,9 +593,9 @@ func TestTimestampPrecisionHandling(t *testing.T) {
 
 // TestQueryBatchSizeConfiguration tests that the batch size configuration affects query streaming
 func TestQueryBatchSizeConfiguration(t *testing.T) {
-	dsn := "root:password@tcp(localhost:3306)/mysql"
+	dsn := getDSN()
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -757,9 +727,9 @@ func TestQueryBatchSizeConfiguration(t *testing.T) {
 
 // TestTypedBuilderHandling tests that the sqlRecordReader properly handles different data types with typed builders
 func TestTypedBuilderHandling(t *testing.T) {
-	dsn := "root:password@tcp(localhost:3306)/mysql"
+	dsn := getDSN()
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -953,7 +923,7 @@ func TestSQLNullableTypesHandling(t *testing.T) {
 		t.Skip("MySQL DSN not available")
 	}
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -1058,7 +1028,7 @@ func TestExtendedArrowArrayTypes(t *testing.T) {
 		t.Skip("MySQL DSN not available")
 	}
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,
@@ -1154,7 +1124,7 @@ func TestTemporalAndDecimalExtraction(t *testing.T) {
 		t.Skip("MySQL DSN not available")
 	}
 
-	mysqlDriver := NewDriver()
+	mysqlDriver := mysql.NewDriver()
 
 	db, err := mysqlDriver.NewDatabase(map[string]string{
 		adbc.OptionKeyURI: dsn,

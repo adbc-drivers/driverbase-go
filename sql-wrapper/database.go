@@ -21,14 +21,7 @@ type databaseImpl struct {
 }
 
 // newDatabase constructs a new ADBC Database backed by *sql.DB.
-func newDatabase(ctx context.Context, opts map[string]string, typeConverter TypeConverter) (adbc.Database, error) {
-	drvName, ok := opts["driver"]
-	if !ok {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  "missing 'driver' option in sql-wrapper",
-		}
-	}
+func newDatabase(ctx context.Context, driverName string, opts map[string]string, typeConverter TypeConverter) (adbc.Database, error) {
 	dsn, ok := opts[adbc.OptionKeyURI]
 	if !ok || dsn == "" {
 		return nil, adbc.Error{
@@ -38,7 +31,7 @@ func newDatabase(ctx context.Context, opts map[string]string, typeConverter Type
 	}
 
 	// Initialize driverbase plumbing first to get ErrorHelper
-	info := driverbase.DefaultDriverInfo(drvName)
+	info := driverbase.DefaultDriverInfo(driverName)
 	drvImpl := driverbase.NewDriverImplBase(info, memory.DefaultAllocator)
 
 	base, err := driverbase.NewDatabaseImplBase(ctx, &drvImpl)
@@ -47,7 +40,7 @@ func newDatabase(ctx context.Context, opts map[string]string, typeConverter Type
 	}
 
 	// Open the underlying SQL pool
-	sqlDB, err := sql.Open(drvName, dsn)
+	sqlDB, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, base.ErrorHelper.IO("failed to open database: %v", err)
 	}

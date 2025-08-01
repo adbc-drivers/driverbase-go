@@ -81,8 +81,14 @@ func appendValue(builder array.Builder, val interface{}) error {
 		switch v := val.(type) {
 		case int8:
 			b.Append(v)
-		case int, int16, int32, int64:
-			return b.AppendValueFromString(fmt.Sprintf("%v", val))
+		case int:
+			b.Append(int8(v))
+		case int16:
+			b.Append(int8(v))
+		case int32:
+			b.Append(int8(v))
+		case int64:
+			b.Append(int8(v))
 		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
@@ -92,8 +98,12 @@ func appendValue(builder array.Builder, val interface{}) error {
 			b.Append(v)
 		case int8:
 			b.Append(int16(v))
-		case int, int32, int64:
-			return b.AppendValueFromString(fmt.Sprintf("%v", val))
+		case int:
+			b.Append(int16(v))
+		case int32:
+			b.Append(int16(v))
+		case int64:
+			b.Append(int16(v))
 		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
@@ -108,7 +118,7 @@ func appendValue(builder array.Builder, val interface{}) error {
 		case int:
 			b.Append(int32(v))
 		case int64:
-			return b.AppendValueFromString(fmt.Sprintf("%v", val))
+			b.Append(int32(v))
 		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
@@ -133,8 +143,14 @@ func appendValue(builder array.Builder, val interface{}) error {
 		switch v := val.(type) {
 		case uint8:
 			b.Append(v)
-		case uint, uint16, uint32, uint64:
-			return b.AppendValueFromString(fmt.Sprintf("%v", val))
+		case uint:
+			b.Append(uint8(v))
+		case uint16:
+			b.Append(uint8(v))
+		case uint32:
+			b.Append(uint8(v))
+		case uint64:
+			b.Append(uint8(v))
 		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
@@ -144,8 +160,12 @@ func appendValue(builder array.Builder, val interface{}) error {
 			b.Append(v)
 		case uint8:
 			b.Append(uint16(v))
-		case uint, uint32, uint64:
-			return b.AppendValueFromString(fmt.Sprintf("%v", val))
+		case uint:
+			b.Append(uint16(v))
+		case uint32:
+			b.Append(uint16(v))
+		case uint64:
+			b.Append(uint16(v))
 		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
@@ -160,7 +180,7 @@ func appendValue(builder array.Builder, val interface{}) error {
 		case uint:
 			b.Append(uint32(v))
 		case uint64:
-			return b.AppendValueFromString(fmt.Sprintf("%v", val))
+			b.Append(uint32(v))
 		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
@@ -187,6 +207,26 @@ func appendValue(builder array.Builder, val interface{}) error {
 			b.Append(v)
 		case float64:
 			b.Append(float32(v))
+		case int:
+			b.Append(float32(v))
+		case int8:
+			b.Append(float32(v))
+		case int16:
+			b.Append(float32(v))
+		case int32:
+			b.Append(float32(v))
+		case int64:
+			b.Append(float32(v))
+		case uint:
+			b.Append(float32(v))
+		case uint8:
+			b.Append(float32(v))
+		case uint16:
+			b.Append(float32(v))
+		case uint32:
+			b.Append(float32(v))
+		case uint64:
+			b.Append(float32(v))
 		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
@@ -196,15 +236,56 @@ func appendValue(builder array.Builder, val interface{}) error {
 			b.Append(v)
 		case float32:
 			b.Append(float64(v))
+		case int:
+			b.Append(float64(v))
+		case int8:
+			b.Append(float64(v))
+		case int16:
+			b.Append(float64(v))
+		case int32:
+			b.Append(float64(v))
+		case int64:
+			b.Append(float64(v))
+		case uint:
+			b.Append(float64(v))
+		case uint8:
+			b.Append(float64(v))
+		case uint16:
+			b.Append(float64(v))
+		case uint32:
+			b.Append(float64(v))
+		case uint64:
+			b.Append(float64(v))
 		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
 
 	// Boolean type
 	case *array.BooleanBuilder:
-		if v, ok := val.(bool); ok {
+		switch v := val.(type) {
+		case bool:
 			b.Append(v)
-		} else {
+		case int:
+			b.Append(v != 0)
+		case int8:
+			b.Append(v != 0)
+		case int16:
+			b.Append(v != 0)
+		case int32:
+			b.Append(v != 0)
+		case int64:
+			b.Append(v != 0)
+		case uint:
+			b.Append(v != 0)
+		case uint8:
+			b.Append(v != 0)
+		case uint16:
+			b.Append(v != 0)
+		case uint32:
+			b.Append(v != 0)
+		case uint64:
+			b.Append(v != 0)
+		default:
 			return b.AppendValueFromString(fmt.Sprintf("%v", val))
 		}
 
@@ -376,29 +457,43 @@ func appendValue(builder array.Builder, val interface{}) error {
 // sqlRecordReaderImpl implements RecordReaderImpl interface for SQL result sets.
 // This is the row-wise implementation that BaseRecordReader converts to batch-wise.
 type sqlRecordReaderImpl struct {
+	// Current result set data
 	rows        *sql.Rows
 	columnTypes []*sql.ColumnType
 	values      []interface{}
 	valuePtrs   []interface{}
 	schema      *arrow.Schema
 	builders    []array.Builder // Array builders for each column
+	
+	// For bind parameter support
+	conn          *sql.Conn      // Database connection to execute queries
+	query         string         // Original SQL query with placeholders
+	stmt          *sql.Stmt      // Prepared statement (optional)
+	typeConverter TypeConverter  // Type converter for building schemas
 }
 
 // NewSQLRecordReader creates a RecordReader using driverbase.BaseRecordReader for streaming SQL results.
 // It wraps the row-wise sqlRecordReaderImpl with BaseRecordReader to provide batch processing.
-func NewSQLRecordReader(ctx context.Context, mem memory.Allocator, rows *sql.Rows, schema *arrow.Schema, columnTypes []*sql.ColumnType, batchSize int64) (array.RecordReader, error) {
+// For bind parameter support, pass conn, query, stmt, and typeConverter. For simple queries, these can be nil.
+// If bind parameters will be used later, all of conn, query, and typeConverter must be non-nil.
+func NewSQLRecordReader(ctx context.Context, mem memory.Allocator, rows *sql.Rows, schema *arrow.Schema, columnTypes []*sql.ColumnType, batchSize int64, conn *sql.Conn, query string, stmt *sql.Stmt, typeConverter TypeConverter) (array.RecordReader, error) {
+	// Validate that if any bind parameter components are provided, the essential ones are present
+	hasBindSupport := conn != nil || query != "" || typeConverter != nil
+	if hasBindSupport && (conn == nil || query == "" || typeConverter == nil) {
+		return nil, fmt.Errorf("bind parameter support requires all of: connection, query, and type converter")
+	}
 	impl := &sqlRecordReaderImpl{
-		rows:        rows,
-		columnTypes: columnTypes,
-		values:      make([]interface{}, len(columnTypes)),
-		valuePtrs:   make([]interface{}, len(columnTypes)),
-		schema:      schema,
+		rows:          rows,
+		columnTypes:   columnTypes,
+		schema:        schema,
+		conn:          conn,
+		query:         query,
+		stmt:          stmt,
+		typeConverter: typeConverter,
 	}
 
-	// Create pointers to the values for Scan
-	for i := range impl.values {
-		impl.valuePtrs[i] = &impl.values[i]
-	}
+	// Initialize value buffers for the initial schema
+	impl.ensureValueBuffers(len(columnTypes))
 
 	// Initialize BaseRecordReader with our implementation
 	reader := &driverbase.BaseRecordReader{}
@@ -410,19 +505,98 @@ func NewSQLRecordReader(ctx context.Context, mem memory.Allocator, rows *sql.Row
 }
 
 // NextResultSet returns the Arrow schema for the current result set.
-// For SQL queries, there's typically only one result set with a predetermined schema.
-// The rec and rowIdx parameters are for bind parameter support (usually nil/0 for simple queries).
+// For SQL queries with bind parameters, this method executes the query with the 
+// specific parameter set (rec[rowIdx]) and returns the resulting schema.
 func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error) {
-	// For SQL queries, we have a single result set with a known schema
+	// Case 1: Simple queries without bind parameters
+	if rec == nil {
+		// For simple queries, we already have the result set and schema
+		return s.schema, nil
+	}
+	
+	// Case 2: Bind parameter queries - validate requirements
+	if s.conn == nil || s.query == "" || s.typeConverter == nil {
+		return nil, fmt.Errorf("bind parameter support requires connection, query, and type converter")
+	}
+	
+	// Close any previous result set
+	if s.rows != nil {
+		s.rows.Close()
+		s.rows = nil
+	}
+	
+	// Extract parameters from the Arrow record for this row
+	n := int(rec.NumCols())
+	args := make([]interface{}, n)
+	for i := 0; i < n; i++ {
+		v, err := extractArrowValue(rec.Column(i), rowIdx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract parameter %d: %w", i, err)
+		}
+		args[i] = v
+	}
+	
+	// Execute the query with bind parameters
+	var rows *sql.Rows
+	var err error
+	if s.stmt != nil {
+		rows, err = s.stmt.QueryContext(ctx, args...)
+	} else {
+		rows, err = s.conn.QueryContext(ctx, s.query, args...)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query with bind parameters: %w", err)
+	}
+	
+	// Get column type information for the new result set
+	columnTypes, err := rows.ColumnTypes()
+	if err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("failed to get column types: %w", err)
+	}
+	
+	// Build Arrow schema from column types
+	schema, err := buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
+	if err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("failed to build Arrow schema: %w", err)
+	}
+	
+	// Update implementation state for new result set
+	s.rows = rows
+	s.columnTypes = columnTypes
+	s.schema = schema
+	s.ensureValueBuffers(len(columnTypes))
+	
 	return s.schema, nil
+}
+
+// ensureValueBuffers ensures the value buffers are sized correctly for the given column count
+func (s *sqlRecordReaderImpl) ensureValueBuffers(numCols int) {
+	// Only reallocate if size has changed
+	if len(s.values) != numCols {
+		s.values = make([]interface{}, numCols)
+		s.valuePtrs = make([]interface{}, numCols)
+	}
+	
+	// Always update pointers since values array might be reallocated
+	for i := range s.values {
+		s.valuePtrs[i] = &s.values[i]
+	}
 }
 
 // BeginAppending prepares for appending rows by initializing the column builders.
 // This is called once before the first AppendRow call to set up the builders.
+// Note: BaseRecordReader may need to call this again after schema changes in NextResultSet.
 func (s *sqlRecordReaderImpl) BeginAppending(builder *array.RecordBuilder) error {
+	// Ensure we have the right number of builders for the current schema
+	numCols := len(s.columnTypes)
+	if len(s.builders) != numCols {
+		s.builders = make([]array.Builder, numCols)
+	}
+	
 	// Grab each builder for the columns from the RecordBuilder
-	s.builders = make([]array.Builder, len(s.columnTypes))
-	for i := range s.columnTypes {
+	for i := 0; i < numCols; i++ {
 		s.builders[i] = builder.Field(i)
 	}
 	return nil
@@ -464,8 +638,19 @@ func (s *sqlRecordReaderImpl) AppendRow(builder *array.RecordBuilder) error {
 
 // Close closes the underlying SQL rows and releases resources.
 func (s *sqlRecordReaderImpl) Close() error {
+	var err error
+	
+	// Close the current result set
 	if s.rows != nil {
-		return s.rows.Close()
+		if closeErr := s.rows.Close(); closeErr != nil {
+			err = closeErr
+		}
+		s.rows = nil
 	}
-	return nil
+	
+	// Close the prepared statement if we own it (passed via constructor)
+	// Note: We only close if we own the statement - typically the statement
+	// is owned by the calling code (statementImpl) and will be closed there
+	
+	return err
 }
