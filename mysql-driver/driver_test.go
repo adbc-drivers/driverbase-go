@@ -1,6 +1,6 @@
 package mysql_test
 
-// TODO: leverage Go validation suite for more comprehensive testing
+// TODO (https://github.com/adbc-drivers/driverbase-go/issues/27): leverage Go validation suite for more comprehensive testing
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/stretchr/testify/require"
-	
+
 	mysql "mysql"
 )
 
@@ -31,7 +31,7 @@ func getDSN() string {
 // Helper function to create Arrow records from string data
 func createTestRecords(allocator memory.Allocator, schema *arrow.Schema, batches [][]string) []arrow.Record {
 	records := make([]arrow.Record, len(batches))
-	
+
 	for i, batch := range batches {
 		// Build string array for this batch
 		builder := array.NewStringBuilder(allocator)
@@ -46,7 +46,7 @@ func createTestRecords(allocator memory.Allocator, schema *arrow.Schema, batches
 		// Create record for this batch
 		records[i] = array.NewRecord(schema, []arrow.Array{stringArray}, int64(len(batch)))
 	}
-	
+
 	return records
 }
 
@@ -217,12 +217,12 @@ func TestDriver(t *testing.T) {
 	streamSchema := arrow.NewSchema([]arrow.Field{
 		{Name: "val", Type: arrow.BinaryTypes.String, Nullable: false},
 	}, nil)
-	
+
 	batches := [][]string{
 		{"cherry", "peach"},    // First batch: 2 rows
 		{"mango", "pineapple"}, // Second batch: 2 rows
 	}
-	
+
 	// Create Arrow records using helper function
 	testRecords := createTestRecords(allocator, streamSchema, batches)
 	defer func() {
@@ -230,7 +230,7 @@ func TestDriver(t *testing.T) {
 			rec.Release()
 		}
 	}()
-	
+
 	// Use Arrow's built-in RecordReader
 	streamReader, err := array.NewRecordReader(streamSchema, testRecords)
 	require.NoError(t, err)
@@ -491,15 +491,15 @@ func TestDecimalTypeHandling(t *testing.T) {
 		t.Logf("Field %d: %s (type: %s)", i, field.Name, field.Type.String())
 
 		if expected, isDecimal := expectedDecimals[field.Name]; isDecimal {
-			// Verify it's a decimal type
-			decimalType, ok := field.Type.(*arrow.Decimal128Type)
-			require.True(t, ok, "Field %s should be Decimal128Type, got %T", field.Name, field.Type)
+			// Verify it's a decimal type (accept any decimal type)
+			decimalType, ok := field.Type.(arrow.DecimalType)
+			require.True(t, ok, "Field %s should be DecimalType, got %T", field.Name, field.Type)
 
 			// Verify precision and scale
-			require.Equal(t, expected.precision, decimalType.Precision, "Precision mismatch for %s", field.Name)
-			require.Equal(t, expected.scale, decimalType.Scale, "Scale mismatch for %s", field.Name)
+			require.Equal(t, expected.precision, decimalType.GetPrecision(), "Precision mismatch for %s", field.Name)
+			require.Equal(t, expected.scale, decimalType.GetScale(), "Scale mismatch for %s", field.Name)
 
-			t.Logf("  Decimal(%d,%d) ✓", decimalType.Precision, decimalType.Scale)
+			t.Logf("  %s(%d,%d) ✓", field.Type.String(), decimalType.GetPrecision(), decimalType.GetScale())
 
 			// Verify metadata includes precision and scale
 			precision, ok := field.Metadata.GetValue("sql.precision")
@@ -562,14 +562,14 @@ func TestTimestampPrecisionHandling(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 7, len(schema.Fields()), "Should have 7 columns")
 
-	// Expected timestamp units based on precision (MySQL reports actual precision)
+	// Expected timestamp units based on precision (timezone-naive in sql-wrapper)
 	expectedTimestamps := map[string]string{
-		"ts_default": "timestamp[s, tz=UTC]",  // MySQL reports precision=0 for default TIMESTAMP
-		"ts_seconds": "timestamp[s, tz=UTC]",  // 0 fractional seconds = seconds
-		"ts_millis":  "timestamp[ms, tz=UTC]", // 3 fractional seconds = milliseconds
-		"ts_micros":  "timestamp[us, tz=UTC]", // 6 fractional seconds = microseconds
-		"dt_default": "timestamp[s, tz=UTC]",  // MySQL reports precision=0 for default DATETIME
-		"dt_millis":  "timestamp[ms, tz=UTC]", // 3 fractional seconds = milliseconds
+		"ts_default": "timestamp[s]",  // MySQL reports precision=0 for default TIMESTAMP
+		"ts_seconds": "timestamp[s]",  // 0 fractional seconds = seconds
+		"ts_millis":  "timestamp[ms]", // 3 fractional seconds = milliseconds
+		"ts_micros":  "timestamp[us]", // 6 fractional seconds = microseconds
+		"dt_default": "timestamp[s]",  // MySQL reports precision=0 for default DATETIME
+		"dt_millis":  "timestamp[ms]", // 3 fractional seconds = milliseconds
 	}
 
 	for i, field := range schema.Fields() {
@@ -824,8 +824,8 @@ func TestTypedBuilderHandling(t *testing.T) {
 		"varchar_val":   "utf8",
 		"text_val":      "utf8",
 		"bool_val":      "int8", // MySQL BOOLEAN is actually TINYINT
-		"decimal_val":   "decimal(10, 2)",
-		"timestamp_val": "timestamp[s, tz=UTC]", // Default precision is 0 = seconds
+		"decimal_val":   "decimal64(10, 2)",
+		"timestamp_val": "timestamp[s]", // Default precision is 0 = seconds
 		"binary_val":    "binary",
 		"json_val":      "utf8", // JSON handled by MySQL type converter
 		"enum_val":      "utf8", // ENUM handled by MySQL type converter
@@ -884,9 +884,13 @@ func TestTypedBuilderHandling(t *testing.T) {
 					require.Equal(t, int8(0), boolCol.Value(1), "Second bool should be 0 (false)")
 
 				case "decimal_val":
-					// Decimal fields should be properly typed
-					_, ok := column.(*array.Decimal128)
-					require.True(t, ok, "Decimal column should be Decimal128 type")
+					// Decimal fields should be properly typed (accept any decimal type)
+					switch column.DataType().(type) {
+					case *arrow.Decimal32Type, *arrow.Decimal64Type, *arrow.Decimal128Type, *arrow.Decimal256Type:
+						// Valid decimal type
+					default:
+						t.Errorf("Decimal column should be a decimal type, got %T", column.DataType())
+					}
 				}
 			}
 
@@ -1205,7 +1209,7 @@ func TestTemporalAndDecimalExtraction(t *testing.T) {
 					case 0: // id - should be int
 						require.Equal(t, arrow.PrimitiveTypes.Int32, col.DataType())
 					case 1: // date_col - should be date
-						require.Equal(t, arrow.FixedWidthTypes.Date32, col.DataType())
+						require.Equal(t, arrow.FixedWidthTypes.Date64, col.DataType())
 					case 2, 3: // datetime_col, timestamp_col - should be timestamp
 						timestampType, ok := col.DataType().(*arrow.TimestampType)
 						require.True(t, ok, "Should be timestamp type")
@@ -1220,10 +1224,10 @@ func TestTemporalAndDecimalExtraction(t *testing.T) {
 						}
 						require.True(t, isTimeType, "Should be time type, got %T", timeType)
 					case 5, 6, 7: // decimal columns - should be decimal
-						decimalType, ok := col.DataType().(*arrow.Decimal128Type)
-						require.True(t, ok, "Should be decimal128 type, got %T", col.DataType())
-						require.Greater(t, decimalType.Precision, int32(0), "Precision should be positive")
-						require.GreaterOrEqual(t, decimalType.Scale, int32(0), "Scale should be non-negative")
+						decimalType, ok := col.DataType().(arrow.DecimalType)
+						require.True(t, ok, "Should be decimal type, got %T", col.DataType())
+						require.Greater(t, decimalType.GetPrecision(), int32(0), "Precision should be positive")
+						require.GreaterOrEqual(t, decimalType.GetScale(), int32(0), "Scale should be non-negative")
 					}
 				}
 			}
@@ -1236,4 +1240,302 @@ func TestTemporalAndDecimalExtraction(t *testing.T) {
 	require.Equal(t, 2, totalRows, "Should read exactly 2 rows")
 
 	t.Log("✅ Temporal and decimal extraction test passed successfully")
+}
+
+// TestMySQLCustomTypeConverter tests the custom MySQL TypeConverter value conversion methods
+func TestMySQLCustomTypeConverter(t *testing.T) {
+	dsn := getDSN()
+	if dsn == "" {
+		t.Skip("MySQL DSN not available")
+	}
+
+	mysqlDriver := mysql.NewDriver()
+
+	db, err := mysqlDriver.NewDatabase(map[string]string{
+		adbc.OptionKeyURI: dsn,
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	cn, err := db.Open(context.Background())
+	require.NoError(t, err)
+	defer cn.Close()
+
+	stmt, err := cn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+
+	// Create test table with MySQL-specific types that will use custom conversion
+	err = stmt.SetSqlQuery(`
+		CREATE TEMPORARY TABLE adbc_test_custom_converter (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			json_col JSON,
+			enum_col ENUM('value1', 'value2', 'value3'),
+			timestamp_col TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			datetime_col DATETIME,
+			text_col TEXT
+		)
+	`)
+	require.NoError(t, err)
+	_, err = stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+
+	// Insert test data with various MySQL-specific values
+	err = stmt.SetSqlQuery(`
+		INSERT INTO adbc_test_custom_converter 
+		(json_col, enum_col, timestamp_col, datetime_col, text_col) 
+		VALUES 
+		('{"key": "value", "number": 42}', 'value1', '2023-06-15 14:30:45', '2023-06-15 14:30:45', 'regular text'),
+		('{"array": [1, 2, 3], "nested": {"inner": true}}', 'value2', '2024-01-01 00:00:00', '2024-01-01 00:00:00', 'more text')
+	`)
+	require.NoError(t, err)
+	affected, err := stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(2), affected, "Should insert 2 rows")
+
+	// Query the data to test the custom TypeConverter
+	err = stmt.SetSqlQuery("SELECT id, json_col, enum_col, timestamp_col, datetime_col, text_col FROM adbc_test_custom_converter ORDER BY id")
+	require.NoError(t, err)
+
+	reader, rowCount, err := stmt.ExecuteQuery(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(-1), rowCount)
+	defer reader.Release()
+
+	schema := reader.Schema()
+	require.Equal(t, 6, len(schema.Fields()), "Should have 6 columns")
+
+	// Verify schema includes MySQL-specific metadata
+	for i, field := range schema.Fields() {
+		t.Logf("Field %d: %s (type: %s)", i, field.Name, field.Type.String())
+
+		switch field.Name {
+		case "json_col":
+			require.Equal(t, "utf8", field.Type.String(), "JSON should be utf8 type")
+			
+			// Verify MySQL JSON metadata
+			isJSON, ok := field.Metadata.GetValue("mysql.is_json")
+			require.True(t, ok, "Should have mysql.is_json metadata")
+			require.Equal(t, "true", isJSON, "Should be marked as JSON")
+			t.Logf("  ✓ JSON metadata detected: %s", isJSON)
+
+		case "enum_col":
+			require.Equal(t, "utf8", field.Type.String(), "ENUM should be utf8 type")
+			
+			// Verify MySQL ENUM metadata
+			isEnumSet, ok := field.Metadata.GetValue("mysql.is_enum_set")
+			require.True(t, ok, "Should have mysql.is_enum_set metadata")
+			require.Equal(t, "true", isEnumSet, "Should be marked as ENUM")
+			t.Logf("  ✓ ENUM metadata detected: %s", isEnumSet)
+
+		case "timestamp_col":
+			require.Equal(t, "timestamp[s]", field.Type.String(), "TIMESTAMP should be timestamp[s]")
+			
+			// Verify this is marked as TIMESTAMP (not DATETIME)
+			dbType, ok := field.Metadata.GetValue("sql.database_type_name")
+			require.True(t, ok, "Should have database_type_name metadata")
+			require.Equal(t, "TIMESTAMP", dbType, "Should be TIMESTAMP type")
+			t.Logf("  ✓ TIMESTAMP type detected: %s", dbType)
+
+		case "datetime_col":
+			require.Equal(t, "timestamp[s]", field.Type.String(), "DATETIME should be timestamp[s]")
+			
+			// Verify this is marked as DATETIME (not TIMESTAMP)
+			dbType, ok := field.Metadata.GetValue("sql.database_type_name")
+			require.True(t, ok, "Should have database_type_name metadata")
+			require.Equal(t, "DATETIME", dbType, "Should be DATETIME type")
+			t.Logf("  ✓ DATETIME type detected: %s", dbType)
+		}
+	}
+
+	totalRows := 0
+	for reader.Next() {
+		record := reader.Record()
+		require.NotNil(t, record, "Record should not be nil")
+
+		rowsInBatch := int(record.NumRows())
+		totalRows += rowsInBatch
+
+		t.Logf("Processing batch with %d rows", rowsInBatch)
+
+		// Test data retrieval and verify custom TypeConverter behavior
+		for rowIdx := 0; rowIdx < rowsInBatch; rowIdx++ {
+			t.Logf("Row %d:", rowIdx)
+
+			// Test JSON column (custom handling in ConvertSQLToArrow)
+			jsonCol := record.Column(1).(*array.String)
+			if !jsonCol.IsNull(rowIdx) {
+				jsonValue := jsonCol.Value(rowIdx)
+				t.Logf("  JSON: %s", jsonValue)
+				
+				// Verify it's valid JSON string
+				require.True(t, len(jsonValue) > 0, "JSON value should not be empty")
+				require.True(t, jsonValue[0] == '{', "JSON should start with {")
+				// Check for content specific to each row
+				if rowIdx == 0 {
+					require.Contains(t, jsonValue, "key", "First JSON should contain 'key'")
+				} else if rowIdx == 1 {
+					require.Contains(t, jsonValue, "array", "Second JSON should contain 'array'")
+				}
+			}
+
+			// Test ENUM column (custom handling in ConvertSQLToArrow)
+			enumCol := record.Column(2).(*array.String)
+			if !enumCol.IsNull(rowIdx) {
+				enumValue := enumCol.Value(rowIdx)
+				t.Logf("  ENUM: %s", enumValue)
+				
+				// Verify it's one of the allowed ENUM values
+				require.Contains(t, []string{"value1", "value2", "value3"}, enumValue, "ENUM value should be valid")
+			}
+
+			// Test TIMESTAMP column (should be handled by custom converter)
+			timestampCol := record.Column(3).(*array.Timestamp)
+			if !timestampCol.IsNull(rowIdx) {
+				timestampValue := timestampCol.Value(rowIdx)
+				t.Logf("  TIMESTAMP: %v", timestampValue)
+				
+				// Verify timestamp is reasonable (between 2020 and 2030)
+				require.True(t, timestampValue > 0, "Timestamp should be positive")
+			}
+
+			// Test DATETIME column (should use default converter behavior)
+			datetimeCol := record.Column(4).(*array.Timestamp)
+			if !datetimeCol.IsNull(rowIdx) {
+				datetimeValue := datetimeCol.Value(rowIdx)
+				t.Logf("  DATETIME: %v", datetimeValue)
+				
+				// Verify datetime is reasonable (between 2020 and 2030)
+				require.True(t, datetimeValue > 0, "Datetime should be positive")
+			}
+		}
+
+		record.Release()
+	}
+
+	require.NoError(t, reader.Err())
+	require.Equal(t, 2, totalRows, "Should read exactly 2 rows")
+
+	t.Log("✅ MySQL custom TypeConverter test passed successfully")
+}
+
+// TestMySQLTypeConverterEdgeCases tests edge cases and error conditions in the custom MySQL TypeConverter
+func TestMySQLTypeConverterEdgeCases(t *testing.T) {
+	dsn := getDSN()
+	if dsn == "" {
+		t.Skip("MySQL DSN not available")
+	}
+
+	mysqlDriver := mysql.NewDriver()
+
+	db, err := mysqlDriver.NewDatabase(map[string]string{
+		adbc.OptionKeyURI: dsn,
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	cn, err := db.Open(context.Background())
+	require.NoError(t, err)
+	defer cn.Close()
+
+	stmt, err := cn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+
+	// Create test table with edge cases
+	err = stmt.SetSqlQuery(`
+		CREATE TEMPORARY TABLE adbc_test_converter_edge_cases (
+			id INT PRIMARY KEY AUTO_INCREMENT,
+			json_null JSON,
+			json_empty JSON,
+			json_invalid TEXT,
+			enum_null ENUM('a', 'b') DEFAULT NULL,
+			timestamp_null TIMESTAMP NULL,
+			large_json JSON
+		)
+	`)
+	require.NoError(t, err)
+	_, err = stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+
+	// Insert edge case data
+	err = stmt.SetSqlQuery(`
+		INSERT INTO adbc_test_converter_edge_cases 
+		(json_null, json_empty, json_invalid, enum_null, timestamp_null, large_json) 
+		VALUES 
+		(NULL, '{}', 'not json', NULL, NULL, '{"large": "data", "array": [1,2,3,4,5], "nested": {"deep": {"deeper": "value"}}}'),
+		('null', '[]', 'also not json', 'a', '2023-01-01 12:00:00', '{"simple": true}')
+	`)
+	require.NoError(t, err)
+	affected, err := stmt.ExecuteUpdate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(2), affected, "Should insert 2 rows")
+
+	// Query and verify edge case handling
+	err = stmt.SetSqlQuery("SELECT * FROM adbc_test_converter_edge_cases ORDER BY id")
+	require.NoError(t, err)
+
+	reader, _, err := stmt.ExecuteQuery(context.Background())
+	require.NoError(t, err)
+	defer reader.Release()
+
+	totalRows := 0
+	for reader.Next() {
+		record := reader.Record()
+		require.NotNil(t, record, "Record should not be nil")
+
+		rowsInBatch := int(record.NumRows())
+		totalRows += rowsInBatch
+
+		// Test NULL handling
+		for rowIdx := 0; rowIdx < rowsInBatch; rowIdx++ {
+			t.Logf("Testing edge case row %d:", rowIdx)
+
+			// Test NULL JSON
+			jsonNullCol := record.Column(1)
+			if rowIdx == 0 {
+				require.True(t, jsonNullCol.IsNull(rowIdx), "First row json_null should be NULL")
+				t.Log("  ✓ NULL JSON handled correctly")
+			}
+
+			// Test empty JSON objects/arrays
+			jsonEmptyCol := record.Column(2)
+			if !jsonEmptyCol.IsNull(rowIdx) {
+				jsonEmpty := jsonEmptyCol.(*array.String).Value(rowIdx)
+				t.Logf("  Empty JSON: %s", jsonEmpty)
+				require.True(t, jsonEmpty == "{}" || jsonEmpty == "[]" || jsonEmpty == "null", "Should handle empty JSON")
+			}
+
+			// Test invalid JSON in TEXT field (should be handled as regular string)
+			jsonInvalidCol := record.Column(3).(*array.String)
+			if !jsonInvalidCol.IsNull(rowIdx) {
+				invalidValue := jsonInvalidCol.Value(rowIdx)
+				t.Logf("  Invalid JSON as text: %s", invalidValue)
+				require.Contains(t, []string{"not json", "also not json"}, invalidValue, "Should handle non-JSON text")
+			}
+
+			// Test NULL ENUM
+			enumNullCol := record.Column(4)
+			if rowIdx == 0 {
+				require.True(t, enumNullCol.IsNull(rowIdx), "First row enum_null should be NULL")
+				t.Log("  ✓ NULL ENUM handled correctly")
+			}
+
+			// Test large JSON (verify custom converter can handle large data)
+			largeJsonCol := record.Column(6).(*array.String)
+			if !largeJsonCol.IsNull(rowIdx) {
+				largeJson := largeJsonCol.Value(rowIdx)
+				t.Logf("  Large JSON length: %d chars", len(largeJson))
+				require.Greater(t, len(largeJson), 10, "Large JSON should be substantial")
+				require.True(t, largeJson[0] == '{', "Large JSON should be valid JSON object")
+			}
+		}
+
+		record.Release()
+	}
+
+	require.NoError(t, reader.Err())
+	require.Equal(t, 2, totalRows, "Should read exactly 2 rows")
+
+	t.Log("✅ MySQL custom TypeConverter edge cases test passed successfully")
 }

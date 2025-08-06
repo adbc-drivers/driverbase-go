@@ -1,3 +1,25 @@
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package sqlwrapper
 
 import (
@@ -51,10 +73,12 @@ func (c *connectionImpl) SetTypeConverter(converter TypeConverter) {
 
 // SetOption sets a string option on this connection
 func (c *connectionImpl) SetOption(key, value string) error {
-	return c.Base().ErrorHelper.NotImplemented("unsupported option: %s", key)
+	return c.ConnectionImplBase.SetOption(key, value)
 }
 
 // Commit is a no-op under auto-commit mode
+// TODO (https://github.com/adbc-drivers/driverbase-go/issues/28): we'll likely want to utilize https://pkg.go.dev/database/sql#Tx
+// to manage this here
 func (c *connectionImpl) Commit(ctx context.Context) error {
 	return c.Base().ErrorHelper.Errorf(
 		adbc.StatusNotImplemented,
@@ -63,6 +87,8 @@ func (c *connectionImpl) Commit(ctx context.Context) error {
 }
 
 // Rollback is a no-op under auto-commit mode
+// TODO (https://github.com/adbc-drivers/driverbase-go/issues/28): we'll likely want to utilize https://pkg.go.dev/database/sql#Tx
+// to manage this here
 func (c *connectionImpl) Rollback(ctx context.Context) error {
 	return c.Base().ErrorHelper.Errorf(
 		adbc.StatusNotImplemented,
@@ -72,8 +98,5 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 
 // Close closes the underlying SQL connection
 func (c *connectionImpl) Close() error {
-	if err := c.conn.Close(); err != nil {
-		return c.Base().ErrorHelper.IO("failed to close connection: %v", err)
-	}
-	return nil
+	return c.conn.Close()
 }

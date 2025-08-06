@@ -178,7 +178,6 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error
 	return buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
 }
 
-
 // ExecuteQuery runs a SELECT and returns a RecordReader for streaming Arrow records
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
 	if s.query == "" {
@@ -214,9 +213,21 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		return nil, -1, s.Base().ErrorHelper.IO("failed to build Arrow schema: %v", err)
 	}
 
-	// Create a record reader using driverbase BaseRecordReader
-	reader, err := NewSQLRecordReader(ctx, memory.DefaultAllocator, rows, schema, columnTypes, int64(s.batchSize), s.conn, s.query, s.stmt, s.typeConverter)
-	if err != nil {
+	// Create a record reader by constructing the implementation directly
+	impl := &sqlRecordReaderImpl{
+		rows:          rows,
+		columnTypes:   columnTypes,
+		schema:        schema,
+		conn:          s.conn,
+		query:         s.query,
+		stmt:          s.stmt,
+		typeConverter: s.typeConverter,
+	}
+	impl.ensureValueBuffers(len(columnTypes))
+
+	// Use BaseRecordReader.Init() as the proper initialization method
+	reader := &driverbase.BaseRecordReader{}
+	if err := reader.Init(ctx, memory.DefaultAllocator, nil, int64(s.batchSize), impl); err != nil {
 		rows.Close()
 		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)
 	}
@@ -260,6 +271,12 @@ func (s *statementImpl) Prepare(ctx context.Context) (err error) {
 		return s.Base().ErrorHelper.InvalidArgument("no query to prepare")
 	}
 
+	// Close old statement if it exists
+	if s.stmt != nil {
+		s.stmt.Close()
+		s.stmt = nil
+	}
+
 	s.stmt, err = s.conn.PrepareContext(ctx, s.query)
 	if err != nil {
 		return s.Base().ErrorHelper.IO("failed to prepare statement: %v", err)
@@ -280,7 +297,6 @@ func (s *statementImpl) SetBatchSize(size int) error {
 func (s *statementImpl) SetSubstraitPlan([]byte) error {
 	return s.Base().ErrorHelper.NotImplemented("SetSubstraitPlan not supported")
 }
-
 
 // executeBulkUpdate executes bulk updates by iterating through the bound stream directly
 func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
@@ -318,7 +334,7 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
 			params := make([]interface{}, record.NumCols())
 			for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
 				arr := record.Column(colIdx)
-				value, err := extractArrowValue(arr, rowIdx)
+				value, err := extractArrowValue(arr, rowIdx, s.typeConverter)
 				if err != nil {
 					return totalAffected, s.Base().ErrorHelper.IO("failed to extract parameter value: %v", err)
 				}

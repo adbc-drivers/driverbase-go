@@ -2,7 +2,6 @@ package sqlwrapper
 
 import (
 	"context"
-
 	"database/sql"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
@@ -66,8 +65,5 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 
 // Closes the database and its underlying connection pool.
 func (d *databaseImpl) Close() error {
-	if err := d.db.Close(); err != nil {
-		return d.DatabaseImplBase.ErrorHelper.IO("failed to close database: %v", err)
-	}
-	return nil
+	return d.db.Close()
 }
