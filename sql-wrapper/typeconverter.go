@@ -5,9 +5,6 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"strings"
-	"time"
-
-	"golang.org/x/exp/constraints"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -23,141 +20,16 @@ const (
 	MetaKeyLength                     = "sql.length"
 )
 
-// unwrap unwraps SQL nullable types using the driver.Valuer interface.
-// Returns the underlying value or nil if the value was NULL in the database.
-func unwrap(val any) (any, error) {
-	if v, ok := val.(driver.Valuer); ok {
-		return v.Value()
-	}
-	return val, nil
-}
-
-func appendNumericToBuilder[T constraints.Integer | constraints.Float](b interface {
-	Append(T)
-	AppendValueFromString(string) error
-}, val any) error {
-	switch v := val.(type) {
-	case int:
-		b.Append(T(v))
-	case uint:
-		b.Append(T(v))
-	case int8:
-		b.Append(T(v))
-	case uint8:
-		b.Append(T(v))
-	case int16:
-		b.Append(T(v))
-	case uint16:
-		b.Append(T(v))
-	case int32:
-		b.Append(T(v))
-	case uint32:
-		b.Append(T(v))
-	case int64:
-		b.Append(T(v))
-	case uint64:
-		b.Append(T(v))
-	case float32:
-		b.Append(T(v))
-	case float64:
-		b.Append(T(v))
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-	return nil
-}
-
-// decimalBuilder is a generic interface for decimal Arrow builders
-type decimalBuilder interface {
-	AppendValueFromString(string) error
-}
-
-// appendDecimalToBuilder is a helper that appends values to decimal Arrow builders
-func appendDecimalToBuilder(b decimalBuilder, val any) error {
-	switch v := val.(type) {
-	case []byte:
-		return b.AppendValueFromString(string(v))
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-}
-
-// booleanBuilder is a generic interface for boolean Arrow builders
-type booleanBuilder interface {
-	Append(bool)
-	AppendValueFromString(string) error
-}
-
-// appendBooleanToBuilder is a helper that appends values to boolean Arrow builders
-func appendBooleanToBuilder(b booleanBuilder, val any) error {
-	switch v := val.(type) {
-	case bool:
-		b.Append(v)
-	case int:
-		b.Append(v != 0)
-	case int8:
-		b.Append(v != 0)
-	case int16:
-		b.Append(v != 0)
-	case int32:
-		b.Append(v != 0)
-	case int64:
-		b.Append(v != 0)
-	case uint:
-		b.Append(v != 0)
-	case uint8:
-		b.Append(v != 0)
-	case uint16:
-		b.Append(v != 0)
-	case uint32:
-		b.Append(v != 0)
-	case uint64:
-		b.Append(v != 0)
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-	return nil
-}
-
-// appendDateToBuilder is a helper that appends values to date Arrow builders
-func appendDateToBuilder(b interface{ AppendValueFromString(string) error }, val any, convertTime func(time.Time) any, appendConverted func(any)) error {
-	switch v := val.(type) {
-	case time.Time:
-		converted := convertTime(v)
-		appendConverted(converted)
-	case []byte:
-		return b.AppendValueFromString(string(v))
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-	return nil
-}
-
-// appendTimeToBuilder is a helper that appends values to time Arrow builders
-func appendTimeToBuilder(b interface{ AppendValueFromString(string) error }, val any, getTimeType func() arrow.TimeUnit, convertTime func(time.Time, arrow.TimeUnit) any, appendConverted func(any)) error {
-	switch v := val.(type) {
-	case time.Time:
-		timeType := getTimeType()
-		converted := convertTime(v, timeType)
-		appendConverted(converted)
-	case []byte:
-		return b.AppendValueFromString(string(v))
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-	return nil
-}
-
 // TypeConverter allows higher-level drivers to customize SQL-to-Arrow type and value conversion
 type TypeConverter interface {
 	// ConvertColumnType converts a SQL column type to an Arrow type and nullable flag
 	// It also returns metadata that should be included in the Arrow field
 	ConvertColumnType(colType *sql.ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
-	
+
 	// ConvertSQLToArrow converts a SQL value to the appropriate Go value for Arrow builders
 	// The sqlValue comes from database/sql scanning, arrowType is the target Arrow type
 	ConvertSQLToArrow(sqlValue any, arrowType arrow.DataType) (any, error)
-	
+
 	// ConvertArrowToGo extracts a Go value from an Arrow array at the given index
 	// This is used for parameter binding and value extraction
 	ConvertArrowToGo(arrowArray arrow.Array, index int) (any, error)
@@ -275,7 +147,7 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 	}
 
 	// For all other types, use the existing conversion with already-parsed values
-	arrowType := sqlTypeToArrow(typeName, nullable)
+	arrowType := mapSQLTypeNameToArrowType(typeName, nullable)
 
 	// Build metadata with original SQL type information
 	metadataMap := map[string]string{
@@ -300,7 +172,7 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 }
 
 // sqlTypeToArrow converts SQL type name to Arrow data type using pre-parsed values
-func sqlTypeToArrow(typeName string, nullable bool) arrow.DataType {
+func mapSQLTypeNameToArrowType(typeName string, nullable bool) arrow.DataType {
 
 	switch typeName {
 	// Integer types
@@ -358,6 +230,15 @@ func sqlTypeToArrow(typeName string, nullable bool) arrow.DataType {
 	}
 }
 
+// unwrap unwraps SQL nullable types using the driver.Valuer interface.
+// Returns the underlying value or nil if the value was NULL in the database.
+func unwrap(val any) (any, error) {
+	if v, ok := val.(driver.Valuer); ok {
+		return v.Value()
+	}
+	return val, nil
+}
+
 // ConvertSQLToArrow implements the default SQL value to Arrow value conversion
 func (d *DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, arrowType arrow.DataType) (any, error) {
 	// Handle SQL nullable types first
@@ -374,8 +255,8 @@ func (d *DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, arrowType arrow.D
 	switch arrowType.(type) {
 	// Numeric types
 	case *arrow.Int8Type, *arrow.Int16Type, *arrow.Int32Type, *arrow.Int64Type,
-		 *arrow.Uint8Type, *arrow.Uint16Type, *arrow.Uint32Type, *arrow.Uint64Type,
-		 *arrow.Float32Type, *arrow.Float64Type:
+		*arrow.Uint8Type, *arrow.Uint16Type, *arrow.Uint32Type, *arrow.Uint64Type,
+		*arrow.Float32Type, *arrow.Float64Type:
 		// Return value as-is for numeric types, appendValue will handle the conversion
 		return val, nil
 
@@ -509,7 +390,7 @@ func (d *DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index in
 	case *array.LargeBinary:
 		return a.Value(index), nil
 
-	// Date/Time types - convert to time.Time
+	// Date/Time types -  use Arrow's built-in ToTime() methods
 	case *array.Date32:
 		return a.Value(index).ToTime(), nil
 	case *array.Date64:

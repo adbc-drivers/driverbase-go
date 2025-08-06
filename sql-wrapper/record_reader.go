@@ -31,8 +31,124 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"golang.org/x/exp/constraints"
 )
 
+func appendNumericToBuilder[T constraints.Integer | constraints.Float](b interface {
+	Append(T)
+	AppendValueFromString(string) error
+}, val any) error {
+	switch v := val.(type) {
+	case int:
+		b.Append(T(v))
+	case uint:
+		b.Append(T(v))
+	case int8:
+		b.Append(T(v))
+	case uint8:
+		b.Append(T(v))
+	case int16:
+		b.Append(T(v))
+	case uint16:
+		b.Append(T(v))
+	case int32:
+		b.Append(T(v))
+	case uint32:
+		b.Append(T(v))
+	case int64:
+		b.Append(T(v))
+	case uint64:
+		b.Append(T(v))
+	case float32:
+		b.Append(T(v))
+	case float64:
+		b.Append(T(v))
+	default:
+		return b.AppendValueFromString(fmt.Sprintf("%v", val))
+	}
+	return nil
+}
+
+// decimalBuilder is a generic interface for decimal Arrow builders
+type decimalBuilder interface {
+	AppendValueFromString(string) error
+}
+
+// appendDecimalToBuilder is a helper that appends values to decimal Arrow builders
+func appendDecimalToBuilder(b decimalBuilder, val any) error {
+	switch v := val.(type) {
+	case []byte:
+		return b.AppendValueFromString(string(v))
+	default:
+		return b.AppendValueFromString(fmt.Sprintf("%v", val))
+	}
+}
+
+// booleanBuilder is a generic interface for boolean Arrow builders
+type booleanBuilder interface {
+	Append(bool)
+	AppendValueFromString(string) error
+}
+
+// appendBooleanToBuilder is a helper that appends values to boolean Arrow builders
+func appendBooleanToBuilder(b booleanBuilder, val any) error {
+	switch v := val.(type) {
+	case bool:
+		b.Append(v)
+	case int:
+		b.Append(v != 0)
+	case int8:
+		b.Append(v != 0)
+	case int16:
+		b.Append(v != 0)
+	case int32:
+		b.Append(v != 0)
+	case int64:
+		b.Append(v != 0)
+	case uint:
+		b.Append(v != 0)
+	case uint8:
+		b.Append(v != 0)
+	case uint16:
+		b.Append(v != 0)
+	case uint32:
+		b.Append(v != 0)
+	case uint64:
+		b.Append(v != 0)
+	default:
+		return b.AppendValueFromString(fmt.Sprintf("%v", val))
+	}
+	return nil
+}
+
+// appendDateToBuilder is a helper that appends values to date Arrow builders
+func appendDateToBuilder(b interface{ AppendValueFromString(string) error }, val any, convertTime func(time.Time) any, appendConverted func(any)) error {
+	switch v := val.(type) {
+	case time.Time:
+		converted := convertTime(v)
+		appendConverted(converted)
+	case []byte:
+		return b.AppendValueFromString(string(v))
+	default:
+		return b.AppendValueFromString(fmt.Sprintf("%v", val))
+	}
+	return nil
+}
+
+// appendTimeToBuilder is a helper that appends values to time Arrow builders
+func appendTimeToBuilder(b interface{ AppendValueFromString(string) error }, val any, getTimeType func() arrow.TimeUnit, convertTime func(time.Time, arrow.TimeUnit) any, appendConverted func(any)) error {
+	switch v := val.(type) {
+	case time.Time:
+		timeType := getTimeType()
+		converted := convertTime(v, timeType)
+		appendConverted(converted)
+	case []byte:
+		return b.AppendValueFromString(string(v))
+	default:
+		return b.AppendValueFromString(fmt.Sprintf("%v", val))
+	}
+	return nil
+}
 
 // appendValue is the unified value appender that handles all Arrow builder types.
 // It uses a TypeConverter to handle SQL-to-Arrow value conversion, then appends to the builder.
@@ -43,7 +159,7 @@ func appendValue(builder array.Builder, val interface{}, typeConverter TypeConve
 	if err != nil {
 		return fmt.Errorf("failed to convert SQL value to Arrow: %w", err)
 	}
-	
+
 	// Handle NULL values
 	if convertedVal == nil {
 		builder.AppendNull()
