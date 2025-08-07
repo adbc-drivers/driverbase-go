@@ -31,131 +31,14 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"golang.org/x/exp/constraints"
 )
 
-func appendNumericToBuilder[T constraints.Integer | constraints.Float](b interface {
-	Append(T)
-	AppendValueFromString(string) error
-}, val any) error {
-	switch v := val.(type) {
-	case int:
-		b.Append(T(v))
-	case uint:
-		b.Append(T(v))
-	case int8:
-		b.Append(T(v))
-	case uint8:
-		b.Append(T(v))
-	case int16:
-		b.Append(T(v))
-	case uint16:
-		b.Append(T(v))
-	case int32:
-		b.Append(T(v))
-	case uint32:
-		b.Append(T(v))
-	case int64:
-		b.Append(T(v))
-	case uint64:
-		b.Append(T(v))
-	case float32:
-		b.Append(T(v))
-	case float64:
-		b.Append(T(v))
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-	return nil
-}
-
-// decimalBuilder is a generic interface for decimal Arrow builders
-type decimalBuilder interface {
-	AppendValueFromString(string) error
-}
-
-// appendDecimalToBuilder is a helper that appends values to decimal Arrow builders
-func appendDecimalToBuilder(b decimalBuilder, val any) error {
-	switch v := val.(type) {
-	case []byte:
-		return b.AppendValueFromString(string(v))
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-}
-
-// booleanBuilder is a generic interface for boolean Arrow builders
-type booleanBuilder interface {
-	Append(bool)
-	AppendValueFromString(string) error
-}
-
-// appendBooleanToBuilder is a helper that appends values to boolean Arrow builders
-func appendBooleanToBuilder(b booleanBuilder, val any) error {
-	switch v := val.(type) {
-	case bool:
-		b.Append(v)
-	case int:
-		b.Append(v != 0)
-	case int8:
-		b.Append(v != 0)
-	case int16:
-		b.Append(v != 0)
-	case int32:
-		b.Append(v != 0)
-	case int64:
-		b.Append(v != 0)
-	case uint:
-		b.Append(v != 0)
-	case uint8:
-		b.Append(v != 0)
-	case uint16:
-		b.Append(v != 0)
-	case uint32:
-		b.Append(v != 0)
-	case uint64:
-		b.Append(v != 0)
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-	return nil
-}
-
-// appendDateToBuilder is a helper that appends values to date Arrow builders
-func appendDateToBuilder(b interface{ AppendValueFromString(string) error }, val any, convertTime func(time.Time) any, appendConverted func(any)) error {
-	switch v := val.(type) {
-	case time.Time:
-		converted := convertTime(v)
-		appendConverted(converted)
-	case []byte:
-		return b.AppendValueFromString(string(v))
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-	return nil
-}
-
-// appendTimeToBuilder is a helper that appends values to time Arrow builders
-func appendTimeToBuilder(b interface{ AppendValueFromString(string) error }, val any, getTimeType func() arrow.TimeUnit, convertTime func(time.Time, arrow.TimeUnit) any, appendConverted func(any)) error {
-	switch v := val.(type) {
-	case time.Time:
-		timeType := getTimeType()
-		converted := convertTime(v, timeType)
-		appendConverted(converted)
-	case []byte:
-		return b.AppendValueFromString(string(v))
-	default:
-		return b.AppendValueFromString(fmt.Sprintf("%v", val))
-	}
-	return nil
-}
 
 // appendValue is the unified value appender that handles all Arrow builder types.
 // It uses a TypeConverter to handle SQL-to-Arrow value conversion, then appends to the builder.
-func appendValue(builder array.Builder, val interface{}, typeConverter TypeConverter) error {
+func appendValue(builder array.Builder, val any, typeConverter TypeConverter, field arrow.Field) error {
 	// Convert SQL value to Arrow value using TypeConverter
-	arrowType := builder.Type()
-	convertedVal, err := typeConverter.ConvertSQLToArrow(val, arrowType)
+	convertedVal, err := typeConverter.ConvertSQLToArrow(val, field)
 	if err != nil {
 		return fmt.Errorf("failed to convert SQL value to Arrow: %w", err)
 	}
@@ -167,138 +50,71 @@ func appendValue(builder array.Builder, val interface{}, typeConverter TypeConve
 	}
 
 	// Now append the converted value using the appropriate builder method
-	// The TypeConverter has already done most of the work, we just need to call the right Append method
+	// The TypeConverter has already done the conversion, we just need to call the right Append method
 	switch b := builder.(type) {
-	// Numeric types - using generic helpers
+	// Numeric types - TypeConverter has already converted to the correct type
 	case *array.Int8Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(int8))
 	case *array.Int16Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(int16))
 	case *array.Int32Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(int32))
 	case *array.Int64Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(int64))
 	case *array.Uint8Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(uint8))
 	case *array.Uint16Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(uint16))
 	case *array.Uint32Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(uint32))
 	case *array.Uint64Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(uint64))
 	case *array.Float32Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(float32))
 	case *array.Float64Builder:
-		return appendNumericToBuilder(b, convertedVal)
+		b.Append(convertedVal.(float64))
 
 	// Boolean type
 	case *array.BooleanBuilder:
-		if boolVal, ok := convertedVal.(bool); ok {
-			b.Append(boolVal)
-		} else {
-			return appendBooleanToBuilder(b, convertedVal)
-		}
+		b.Append(convertedVal.(bool))
 
 	// String types
 	case array.StringLikeBuilder:
-		if strVal, ok := convertedVal.(string); ok {
-			b.Append(strVal)
-		} else {
-			return b.AppendValueFromString(fmt.Sprintf("%v", convertedVal))
-		}
+		b.Append(convertedVal.(string))
 
 	// Binary types
 	case array.BinaryLikeBuilder:
-		if binVal, ok := convertedVal.([]byte); ok {
-			b.Append(binVal)
-		} else {
-			return b.AppendValueFromString(fmt.Sprintf("%v", convertedVal))
-		}
+		b.Append(convertedVal.([]byte))
 
-	// Date types - using generic helpers
+	// Date types
 	case *array.Date32Builder:
-		return appendDateToBuilder(b, convertedVal,
-			func(t time.Time) any {
-				// Date32 stores days since epoch
-				return arrow.Date32(t.Unix() / (24 * 3600))
-			},
-			func(converted any) { b.Append(converted.(arrow.Date32)) })
+		b.Append(convertedVal.(arrow.Date32))
 	case *array.Date64Builder:
-		return appendDateToBuilder(b, convertedVal,
-			func(t time.Time) any {
-				// Date64 stores milliseconds since epoch
-				return arrow.Date64(t.UnixMilli())
-			},
-			func(converted any) { b.Append(converted.(arrow.Date64)) })
+		b.Append(convertedVal.(arrow.Date64))
 
-	// Time types - using generic helpers
+	// Time types
 	case *array.Time32Builder:
-		return appendTimeToBuilder(b, convertedVal,
-			func() arrow.TimeUnit { return b.Type().(*arrow.Time32Type).Unit },
-			func(t time.Time, unit arrow.TimeUnit) any {
-				// Convert to time since midnight based on unit
-				switch unit {
-				case arrow.Second:
-					return arrow.Time32(t.Hour()*3600 + t.Minute()*60 + t.Second())
-				case arrow.Millisecond:
-					return arrow.Time32(t.Hour()*3600000 + t.Minute()*60000 + t.Second()*1000 + t.Nanosecond()/1000000)
-				default:
-					return arrow.Time32(t.Hour()*3600000 + t.Minute()*60000 + t.Second()*1000 + t.Nanosecond()/1000000)
-				}
-			},
-			func(converted any) { b.Append(converted.(arrow.Time32)) })
+		b.Append(convertedVal.(arrow.Time32))
 	case *array.Time64Builder:
-		return appendTimeToBuilder(b, convertedVal,
-			func() arrow.TimeUnit { return b.Type().(*arrow.Time64Type).Unit },
-			func(t time.Time, unit arrow.TimeUnit) any {
-				// Convert to time since midnight based on unit
-				switch unit {
-				case arrow.Microsecond:
-					return arrow.Time64(t.Hour()*3600000000 + t.Minute()*60000000 + t.Second()*1000000 + t.Nanosecond()/1000)
-				case arrow.Nanosecond:
-					return arrow.Time64(t.Hour()*3600000000000 + t.Minute()*60000000000 + t.Second()*1000000000 + t.Nanosecond())
-				default:
-					return arrow.Time64(t.Hour()*3600000000 + t.Minute()*60000000 + t.Second()*1000000 + t.Nanosecond()/1000)
-				}
-			},
-			func(converted any) { b.Append(converted.(arrow.Time64)) })
+		b.Append(convertedVal.(arrow.Time64))
 
-	// Timestamp types - using generic helpers
+	// Timestamp types - use built-in AppendTime method
 	case *array.TimestampBuilder:
-		return appendTimeToBuilder(b, convertedVal,
-			func() arrow.TimeUnit { return b.Type().(*arrow.TimestampType).Unit },
-			func(t time.Time, unit arrow.TimeUnit) any {
-				switch unit {
-				case arrow.Second:
-					return arrow.Timestamp(t.Unix())
-				case arrow.Millisecond:
-					return arrow.Timestamp(t.UnixMilli())
-				case arrow.Microsecond:
-					return arrow.Timestamp(t.UnixMicro())
-				case arrow.Nanosecond:
-					return arrow.Timestamp(t.UnixNano())
-				default:
-					return arrow.Timestamp(t.UnixMicro())
-				}
-			},
-			func(converted any) { b.Append(converted.(arrow.Timestamp)) })
+		b.AppendTime(convertedVal.(time.Time))
 
-	// Decimal types - use generic helper since TypeConverter returns raw value
+	// Decimal types - TypeConverter returns string for AppendValueFromString
 	case *array.Decimal32Builder:
-		return appendDecimalToBuilder(b, convertedVal)
+		return b.AppendValueFromString(convertedVal.(string))
 	case *array.Decimal64Builder:
-		return appendDecimalToBuilder(b, convertedVal)
+		return b.AppendValueFromString(convertedVal.(string))
 	case *array.Decimal128Builder:
-		return appendDecimalToBuilder(b, convertedVal)
+		return b.AppendValueFromString(convertedVal.(string))
 	case *array.Decimal256Builder:
-		return appendDecimalToBuilder(b, convertedVal)
+		return b.AppendValueFromString(convertedVal.(string))
 
 	// Fallback for any unhandled builder types
 	default:
-		if stringAppender, ok := builder.(interface{ AppendValueFromString(string) error }); ok {
-			return stringAppender.AppendValueFromString(fmt.Sprintf("%v", convertedVal))
-		}
-		return fmt.Errorf("unsupported builder type: %T", builder)
+		return builder.AppendValueFromString(fmt.Sprintf("%v", convertedVal))
 	}
 
 	return nil
@@ -344,9 +160,10 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 
 	// Extract parameters from the Arrow record for this row
 	n := int(rec.NumCols())
-	args := make([]interface{}, n)
+	args := make([]any, n)
 	for i := 0; i < n; i++ {
-		v, err := extractArrowValue(rec.Column(i), rowIdx, s.typeConverter)
+		field := rec.Schema().Field(i)
+		v, err := extractArrowValue(rec.Column(i), rowIdx, s.typeConverter, field)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract parameter %d: %w", i, err)
 		}
@@ -392,8 +209,8 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 func (s *sqlRecordReaderImpl) ensureValueBuffers(numCols int) {
 	// Only reallocate if size has changed
 	if len(s.values) != numCols {
-		s.values = make([]interface{}, numCols)
-		s.valuePtrs = make([]interface{}, numCols)
+		s.values = make([]any, numCols)
+		s.valuePtrs = make([]any, numCols)
 	}
 
 	// Always update pointers since values array might be reallocated
@@ -437,12 +254,13 @@ func (s *sqlRecordReaderImpl) AppendRow(builder *array.RecordBuilder) error {
 	// Append each column value to its corresponding Arrow builder
 	for i := 0; i < len(s.values); i++ {
 		fieldBuilder := builder.Field(i)
+		field := s.schema.Field(i)
 		if s.values[i] == nil {
 			// Handle SQL NULL values
 			fieldBuilder.AppendNull()
 		} else {
 			// Use the unified appendValue function to handle type conversion
-			if err := appendValue(fieldBuilder, s.values[i], s.typeConverter); err != nil {
+			if err := appendValue(fieldBuilder, s.values[i], s.typeConverter, field); err != nil {
 				return fmt.Errorf("failed to append value to column %d: %w", i, err)
 			}
 		}

@@ -1,3 +1,25 @@
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package mysql_test
 
 // TODO (https://github.com/adbc-drivers/driverbase-go/issues/27): leverage Go validation suite for more comprehensive testing
@@ -15,7 +37,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/stretchr/testify/require"
 
-	mysql "mysql"
+	mysql "github.com/adbc-drivers/driverbase-go/mysql"
 )
 
 // getDSN returns the MySQL DSN for testing, using environment variable or default
@@ -1312,7 +1334,7 @@ func TestMySQLCustomTypeConverter(t *testing.T) {
 		switch field.Name {
 		case "json_col":
 			require.Equal(t, "utf8", field.Type.String(), "JSON should be utf8 type")
-			
+
 			// Verify MySQL JSON metadata
 			isJSON, ok := field.Metadata.GetValue("mysql.is_json")
 			require.True(t, ok, "Should have mysql.is_json metadata")
@@ -1321,7 +1343,7 @@ func TestMySQLCustomTypeConverter(t *testing.T) {
 
 		case "enum_col":
 			require.Equal(t, "utf8", field.Type.String(), "ENUM should be utf8 type")
-			
+
 			// Verify MySQL ENUM metadata
 			isEnumSet, ok := field.Metadata.GetValue("mysql.is_enum_set")
 			require.True(t, ok, "Should have mysql.is_enum_set metadata")
@@ -1330,7 +1352,7 @@ func TestMySQLCustomTypeConverter(t *testing.T) {
 
 		case "timestamp_col":
 			require.Equal(t, "timestamp[s]", field.Type.String(), "TIMESTAMP should be timestamp[s]")
-			
+
 			// Verify this is marked as TIMESTAMP (not DATETIME)
 			dbType, ok := field.Metadata.GetValue("sql.database_type_name")
 			require.True(t, ok, "Should have database_type_name metadata")
@@ -1339,7 +1361,7 @@ func TestMySQLCustomTypeConverter(t *testing.T) {
 
 		case "datetime_col":
 			require.Equal(t, "timestamp[s]", field.Type.String(), "DATETIME should be timestamp[s]")
-			
+
 			// Verify this is marked as DATETIME (not TIMESTAMP)
 			dbType, ok := field.Metadata.GetValue("sql.database_type_name")
 			require.True(t, ok, "Should have database_type_name metadata")
@@ -1367,7 +1389,7 @@ func TestMySQLCustomTypeConverter(t *testing.T) {
 			if !jsonCol.IsNull(rowIdx) {
 				jsonValue := jsonCol.Value(rowIdx)
 				t.Logf("  JSON: %s", jsonValue)
-				
+
 				// Verify it's valid JSON string
 				require.True(t, len(jsonValue) > 0, "JSON value should not be empty")
 				require.True(t, jsonValue[0] == '{', "JSON should start with {")
@@ -1384,7 +1406,7 @@ func TestMySQLCustomTypeConverter(t *testing.T) {
 			if !enumCol.IsNull(rowIdx) {
 				enumValue := enumCol.Value(rowIdx)
 				t.Logf("  ENUM: %s", enumValue)
-				
+
 				// Verify it's one of the allowed ENUM values
 				require.Contains(t, []string{"value1", "value2", "value3"}, enumValue, "ENUM value should be valid")
 			}
@@ -1394,7 +1416,7 @@ func TestMySQLCustomTypeConverter(t *testing.T) {
 			if !timestampCol.IsNull(rowIdx) {
 				timestampValue := timestampCol.Value(rowIdx)
 				t.Logf("  TIMESTAMP: %v", timestampValue)
-				
+
 				// Verify timestamp is reasonable (between 2020 and 2030)
 				require.True(t, timestampValue > 0, "Timestamp should be positive")
 			}
@@ -1404,7 +1426,7 @@ func TestMySQLCustomTypeConverter(t *testing.T) {
 			if !datetimeCol.IsNull(rowIdx) {
 				datetimeValue := datetimeCol.Value(rowIdx)
 				t.Logf("  DATETIME: %v", datetimeValue)
-				
+
 				// Verify datetime is reasonable (between 2020 and 2030)
 				require.True(t, datetimeValue > 0, "Datetime should be positive")
 			}

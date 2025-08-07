@@ -1,14 +1,39 @@
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package sqlwrapper
 
 import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/extensions"
+	"golang.org/x/exp/constraints"
 )
 
 const (
@@ -27,38 +52,316 @@ type TypeConverter interface {
 	ConvertColumnType(colType *sql.ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
 
 	// ConvertSQLToArrow converts a SQL value to the appropriate Go value for Arrow builders
-	// The sqlValue comes from database/sql scanning, arrowType is the target Arrow type
-	ConvertSQLToArrow(sqlValue any, arrowType arrow.DataType) (any, error)
+	// The sqlValue comes from database/sql scanning, field contains the target Arrow type and metadata
+	ConvertSQLToArrow(sqlValue any, field arrow.Field) (any, error)
 
 	// ConvertArrowToGo extracts a Go value from an Arrow array at the given index
 	// This is used for parameter binding and value extraction
-	ConvertArrowToGo(arrowArray arrow.Array, index int) (any, error)
+	// The field parameter provides access to the Arrow field metadata
+	ConvertArrowToGo(arrowArray arrow.Array, index int, field arrow.Field) (any, error)
 }
 
 // DefaultTypeConverter provides the default SQL-to-Arrow type conversion
 type DefaultTypeConverter struct{}
 
+// convertPrecisionToTimeUnit converts fractional seconds precision to Arrow TimeUnit
+// Clamps precision to maximum supported value (9 fractional digits = nanoseconds)
+func convertPrecisionToTimeUnit(precision int64) arrow.TimeUnit {
+	if precision > 9 {
+		// Clamp to max supported precision
+		precision = 9
+	}
+	return arrow.TimeUnit(precision / 3)
+}
+
+// convertToNumericType converts a SQL value to the target numeric type T
+func convertToNumericType[T constraints.Integer | constraints.Float](val any) (T, error) {
+	switch v := val.(type) {
+	case int:
+		return T(v), nil
+	case uint:
+		return T(v), nil
+	case int8:
+		return T(v), nil
+	case uint8:
+		return T(v), nil
+	case int16:
+		return T(v), nil
+	case uint16:
+		return T(v), nil
+	case int32:
+		return T(v), nil
+	case uint32:
+		return T(v), nil
+	case int64:
+		return T(v), nil
+	case uint64:
+		return T(v), nil
+	case float32:
+		return T(v), nil
+	case float64:
+		return T(v), nil
+	default:
+		// Fallback to string parsing
+		strVal := fmt.Sprintf("%v", val)
+		var zero T
+		switch any(zero).(type) {
+		case int8, int16, int32, int64:
+			parsed, err := strconv.ParseInt(strVal, 10, 64)
+			if err != nil {
+				return zero, fmt.Errorf("cannot convert %q to %T: %w", strVal, zero, err)
+			}
+			return T(parsed), nil
+		case uint8, uint16, uint32, uint64:
+			parsed, err := strconv.ParseUint(strVal, 10, 64)
+			if err != nil {
+				return zero, fmt.Errorf("cannot convert %q to %T: %w", strVal, zero, err)
+			}
+			return T(parsed), nil
+		case float32, float64:
+			parsed, err := strconv.ParseFloat(strVal, 64)
+			if err != nil {
+				return zero, fmt.Errorf("cannot convert %q to %T: %w", strVal, zero, err)
+			}
+			return T(parsed), nil
+		default:
+			return zero, fmt.Errorf("unsupported numeric type conversion to %T", zero)
+		}
+	}
+}
+
+// convertToBool converts a SQL value to bool type
+func convertToBool(val any) (bool, error) {
+	switch v := val.(type) {
+	case bool:
+		return v, nil
+	case int:
+		return v != 0, nil
+	case int8:
+		return v != 0, nil
+	case int16:
+		return v != 0, nil
+	case int32:
+		return v != 0, nil
+	case int64:
+		return v != 0, nil
+	case uint:
+		return v != 0, nil
+	case uint8:
+		return v != 0, nil
+	case uint16:
+		return v != 0, nil
+	case uint32:
+		return v != 0, nil
+	case uint64:
+		return v != 0, nil
+	default:
+		// Use strconv.ParseBool for string parsing
+		strVal := fmt.Sprintf("%v", val)
+		boolVal, err := strconv.ParseBool(strVal)
+		if err != nil {
+			return false, fmt.Errorf("cannot convert %q to bool: %w", strVal, err)
+		}
+		return boolVal, nil
+	}
+}
+
+// convertToString converts a SQL value to string type
+func convertToString(val any) (string, error) {
+	switch v := val.(type) {
+	case string:
+		return v, nil
+	case []byte:
+		return string(v), nil
+	default:
+		return fmt.Sprintf("%v", val), nil
+	}
+}
+
+// convertToBinary converts a SQL value to []byte type
+func convertToBinary(val any) ([]byte, error) {
+	switch v := val.(type) {
+	case string:
+		return []byte(v), nil
+	case []byte:
+		return v, nil
+	default:
+		return []byte(fmt.Sprintf("%v", val)), nil
+	}
+}
+
+// convertToDate32 converts a SQL value to arrow.Date32 type
+func convertToDate32(val any) (arrow.Date32, error) {
+	switch v := val.(type) {
+	case time.Time:
+		return arrow.Date32FromTime(v), nil
+	default:
+		return 0, fmt.Errorf("cannot convert %T to Date32, expected time.Time", val)
+	}
+}
+
+// convertToDate64 converts a SQL value to arrow.Date64 type
+func convertToDate64(val any) (arrow.Date64, error) {
+	switch v := val.(type) {
+	case time.Time:
+		return arrow.Date64FromTime(v), nil
+	case []byte:
+		// parse string from []byte
+		return parseDateAndConvert(string(v))
+	case string:
+		return parseDateAndConvert(v)
+	default:
+		return 0, fmt.Errorf("cannot convert %T to Date64, expected time.Time", val)
+	}
+}
+
+// helper to parse string date and convert to arrow.Date64
+func parseDateAndConvert(s string) (arrow.Date64, error) {
+	// Use common date formats to parse
+	layouts := []string{
+		"2006-01-02",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05Z07:00",
+	}
+
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return arrow.Date64FromTime(t), nil
+		}
+	}
+	return 0, fmt.Errorf("cannot parse date string %q", s)
+}
+
+// convertToTime32 converts a SQL value to arrow.Time32 type
+func convertToTime32(val any) (arrow.Time32, error) {
+	switch v := val.(type) {
+	case time.Time:
+		// Convert to time since midnight - assume milliseconds for Time32
+		return arrow.Time32(v.Hour()*3600000 + v.Minute()*60000 + v.Second()*1000 + v.Nanosecond()/1000000), nil
+	case []byte:
+		return parseTimeOnly(string(v))
+	case string:
+		return parseTimeOnly(v)
+	default:
+		return 0, fmt.Errorf("cannot convert %T to Time32, expected time.Time", val)
+	}
+}
+
+func parseTimeOnly(s string) (arrow.Time32, error) {
+	layouts := []string{
+		"15:04:05",
+		"15:04:05.999",
+		"15:04:05.999999",
+		"15:04",
+	}
+
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			// Convert time-of-day to milliseconds since midnight
+			ms := t.Hour()*3600000 + t.Minute()*60000 + t.Second()*1000 + t.Nanosecond()/1_000_000
+			return arrow.Time32(ms), nil
+		}
+	}
+
+	return 0, fmt.Errorf("could not parse time-only string: %q", s)
+}
+
+// convertToTime64 converts a SQL value to arrow.Time64 type
+func convertToTime64(val any) (arrow.Time64, error) {
+	switch v := val.(type) {
+	case time.Time:
+		// Convert to time since midnight - assume microseconds for Time64
+		return arrow.Time64(v.Hour()*3600000000 + v.Minute()*60000000 + v.Second()*1000000 + v.Nanosecond()/1000), nil
+	case []byte:
+		return parseTime64FromString(string(v))
+	case string:
+		return parseTime64FromString(v)
+	default:
+		return 0, fmt.Errorf("cannot convert %T to Time64, expected time.Time", val)
+	}
+}
+
+func parseTime64FromString(s string) (arrow.Time64, error) {
+	// parse time using common layouts
+	layouts := []string{
+		"15:04:05",
+		"15:04:05.999999999",
+		"15:04:05.999999",
+		"15:04:05.999",
+	}
+
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return arrow.Time64(t.Hour())*3600_000_000_000 +
+				arrow.Time64(t.Minute())*60_000_000_000 +
+				arrow.Time64(t.Second())*1_000_000_000 +
+				arrow.Time64(t.Nanosecond()), nil
+		}
+	}
+	return 0, fmt.Errorf("could not parse time string: %q", s)
+}
+
+// convertToTimestamp converts a SQL value to time.Time for TimestampBuilder.AppendTime
+func convertToTimestamp(val any) (time.Time, error) {
+	switch v := val.(type) {
+	case time.Time:
+		return v, nil
+	case []byte:
+		return parseTime(string(v))
+	case string:
+		return parseTime(v)
+	default:
+		return time.Time{}, fmt.Errorf("cannot convert %T to timestamp, expected time.Time", val)
+	}
+}
+
+func parseTime(s string) (time.Time, error) {
+	// Common layouts used by databases (RFC3339 is common in Arrow)
+	layouts := []string{
+		time.RFC3339,                  // "2006-01-02T15:04:05Z07:00"
+		"2006-01-02 15:04:05",         // MySQL/PostgreSQL common format
+		"2006-01-02",                  // Date only
+		"2006-01-02 15:04:05.999999",  // With microseconds
+		"2006-01-02T15:04:05.999999Z", // ISO-like
+	}
+
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("could not parse timestamp string: %q", s)
+}
+
+// convertToDecimalString converts a SQL value to string for decimal AppendValueFromString
+func convertToDecimalString(val any) (string, error) {
+	switch v := val.(type) {
+	case []byte:
+		return string(v), nil
+	default:
+		return fmt.Sprintf("%v", val), nil
+	}
+}
+
 // ConvertColumnType implements TypeConverter interface with the default conversion logic
-func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.DataType, bool, arrow.Metadata, error) {
+func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.DataType, bool, arrow.Metadata, error) {
 	typeName := strings.ToUpper(colType.DatabaseTypeName())
 	nullable, _ := colType.Nullable()
 
-	// Handle DECIMAL/NUMERIC types with proper precision and scale
-	if typeName == "DECIMAL" || typeName == "NUMERIC" {
+	switch typeName {
+	case "DECIMAL", "NUMERIC":
 		if precision, scale, ok := colType.DecimalSize(); ok {
-			if scale == 0 {
+			if scale == 0 && precision <= 19 { // max digits for int64
 				// Treat as integer type if precision fits in int64
-				if precision <= 19 { // max digits for int64
-					arrowType := arrow.PrimitiveTypes.Int64
-					metadata := arrow.MetadataFrom(map[string]string{
-						MetaKeyDatabaseTypeName: colType.DatabaseTypeName(),
-						MetaKeyColumnName:       colType.Name(),
-						MetaKeyPrecision:        fmt.Sprintf("%d", precision),
-						MetaKeyScale:            fmt.Sprintf("%d", scale),
-					})
-					return arrowType, nullable, metadata, nil
-				}
-				// If precision too large for int64, keep as decimal
+				arrowType := arrow.PrimitiveTypes.Int64
+				metadata := arrow.MetadataFrom(map[string]string{
+					MetaKeyDatabaseTypeName: colType.DatabaseTypeName(),
+					MetaKeyColumnName:       colType.Name(),
+					MetaKeyPrecision:        fmt.Sprintf("%d", precision),
+					MetaKeyScale:            fmt.Sprintf("%d", scale),
+				})
+				return arrowType, nullable, metadata, nil
 			}
 
 			// Otherwise, create Decimal128 type
@@ -79,10 +382,8 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 			return arrowType, nullable, metadata, nil
 		}
 		// Fall back to string if precision/scale not available
-	}
 
-	// Handle DATETIME/TIMESTAMP types with proper precision
-	if typeName == "DATETIME" || typeName == "TIMESTAMP" {
+	case "DATETIME", "TIMESTAMP":
 		// Try to get precision from DecimalSize (which represents fractional seconds precision)
 		var timestampType arrow.DataType
 		metadataMap := map[string]string{
@@ -93,13 +394,7 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 		if precision, _, ok := colType.DecimalSize(); ok {
 			// precision represents fractional seconds digits (0-9)
 			metadataMap[MetaKeyFractionalSecondsPrecision] = fmt.Sprintf("%d", precision)
-
-			if precision > 9 {
-				// Clamp to max supported precision (9 fractional digits = nanoseconds)
-				precision = 9
-			}
-
-			timeUnit := arrow.TimeUnit(precision / 3)
+			timeUnit := convertPrecisionToTimeUnit(precision)
 			timestampType = &arrow.TimestampType{Unit: timeUnit}
 		} else {
 			// No precision info available, default to microseconds (most common)
@@ -108,10 +403,8 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 
 		metadata := arrow.MetadataFrom(metadataMap)
 		return timestampType, nullable, metadata, nil
-	}
 
-	// Handle TIME types with proper precision
-	if typeName == "TIME" {
+	case "TIME":
 		// Try to get precision from DecimalSize (which represents fractional seconds precision)
 		var timeType arrow.DataType
 		metadataMap := map[string]string{
@@ -122,13 +415,7 @@ func (d *DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow
 		if precision, _, ok := colType.DecimalSize(); ok {
 			// precision represents fractional seconds digits (0-9)
 			metadataMap[MetaKeyFractionalSecondsPrecision] = fmt.Sprintf("%d", precision)
-
-			if precision > 9 {
-				// Clamp to max supported precision
-				precision = 9
-			}
-
-			timeUnit := arrow.TimeUnit(precision / 3)
+			timeUnit := convertPrecisionToTimeUnit(precision)
 
 			// Note: Arrow distinguishes between Time32 and Time64 based on unit:
 			// Time32 supports seconds and milliseconds; Time64 supports microseconds and nanoseconds.
@@ -240,7 +527,8 @@ func unwrap(val any) (any, error) {
 }
 
 // ConvertSQLToArrow implements the default SQL value to Arrow value conversion
-func (d *DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, arrowType arrow.DataType) (any, error) {
+func (d DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, field arrow.Field) (any, error) {
+	arrowType := field.Type
 	// Handle SQL nullable types first
 	unwrapped, err := unwrap(sqlValue)
 	if err != nil {
@@ -249,95 +537,71 @@ func (d *DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, arrowType arrow.D
 	if unwrapped == nil {
 		return nil, nil // NULL value
 	}
-	val := unwrapped
 
-	// Convert based on the target Arrow type - using the same logic as appendValue
+	// Convert based on the target Arrow type - doing all conversions here to simplify append logic
 	switch arrowType.(type) {
-	// Numeric types
-	case *arrow.Int8Type, *arrow.Int16Type, *arrow.Int32Type, *arrow.Int64Type,
-		*arrow.Uint8Type, *arrow.Uint16Type, *arrow.Uint32Type, *arrow.Uint64Type,
-		*arrow.Float32Type, *arrow.Float64Type:
-		// Return value as-is for numeric types, appendValue will handle the conversion
-		return val, nil
+	// Numeric types - handle conversion here instead of in appendValue
+	case *arrow.Int8Type:
+		return convertToNumericType[int8](unwrapped)
+	case *arrow.Int16Type:
+		return convertToNumericType[int16](unwrapped)
+	case *arrow.Int32Type:
+		return convertToNumericType[int32](unwrapped)
+	case *arrow.Int64Type:
+		return convertToNumericType[int64](unwrapped)
+	case *arrow.Uint8Type:
+		return convertToNumericType[uint8](unwrapped)
+	case *arrow.Uint16Type:
+		return convertToNumericType[uint16](unwrapped)
+	case *arrow.Uint32Type:
+		return convertToNumericType[uint32](unwrapped)
+	case *arrow.Uint64Type:
+		return convertToNumericType[uint64](unwrapped)
+	case *arrow.Float32Type:
+		return convertToNumericType[float32](unwrapped)
+	case *arrow.Float64Type:
+		return convertToNumericType[float64](unwrapped)
 
 	// Boolean type
 	case *arrow.BooleanType:
-		// Convert to boolean using the same logic as appendBooleanToBuilder
-		switch v := val.(type) {
-		case bool:
-			return v, nil
-		case int:
-			return v != 0, nil
-		case int8:
-			return v != 0, nil
-		case int16:
-			return v != 0, nil
-		case int32:
-			return v != 0, nil
-		case int64:
-			return v != 0, nil
-		case uint:
-			return v != 0, nil
-		case uint8:
-			return v != 0, nil
-		case uint16:
-			return v != 0, nil
-		case uint32:
-			return v != 0, nil
-		case uint64:
-			return v != 0, nil
-		default:
-			return val, nil // Let appendValue handle string conversion
-		}
+		return convertToBool(unwrapped)
 
 	// String types
 	case *arrow.StringType, *arrow.LargeStringType, *arrow.StringViewType:
-		switch v := val.(type) {
-		case string:
-			return v, nil
-		case []byte:
-			return string(v), nil
-		default:
-			return fmt.Sprintf("%v", val), nil
-		}
+		return convertToString(unwrapped)
 
 	// Binary types
 	case *arrow.BinaryType, *arrow.LargeBinaryType, *arrow.BinaryViewType, *arrow.FixedSizeBinaryType:
-		switch v := val.(type) {
-		case string:
-			return []byte(v), nil
-		case []byte:
-			return v, nil
-		default:
-			return []byte(fmt.Sprintf("%v", val)), nil
-		}
+		return convertToBinary(unwrapped)
 
-	// Date types - return as-is, let appendValue handle the conversion
-	case *arrow.Date32Type, *arrow.Date64Type:
-		return val, nil
+	// Date types
+	case *arrow.Date32Type:
+		return convertToDate32(unwrapped)
+	case *arrow.Date64Type:
+		return convertToDate64(unwrapped)
 
-	// Time types - return as-is, let appendValue handle the conversion
-	case *arrow.Time32Type, *arrow.Time64Type:
-		return val, nil
+	// Time types
+	case *arrow.Time32Type:
+		return convertToTime32(unwrapped)
+	case *arrow.Time64Type:
+		return convertToTime64(unwrapped)
 
 	// Timestamp types
 	case *arrow.TimestampType:
-		// For timestamp types, return the value as-is and let appendValue handle the conversion
-		// This avoids precision issues and lets the builder handle the conversion properly
-		return val, nil
+		return convertToTimestamp(unwrapped)
 
-	// Decimal types - return as-is, let appendValue handle the conversion
+	// Decimal types - return as string for AppendValueFromString
 	case *arrow.Decimal32Type, *arrow.Decimal64Type, *arrow.Decimal128Type, *arrow.Decimal256Type:
-		return val, nil
+		return convertToDecimalString(unwrapped)
 
 	// Default: return value as-is
 	default:
-		return val, nil
+		return unwrapped, nil
 	}
 }
 
 // ConvertArrowToGo implements the default Arrow value to Go value conversion
-func (d *DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index int) (any, error) {
+func (d DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index int, field arrow.Field) (any, error) {
 	if arrowArray.IsNull(index) {
 		return nil, nil
 	}

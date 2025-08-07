@@ -29,8 +29,8 @@ import (
 )
 
 // extractArrowValue extracts a value from an Arrow array at the given index using a TypeConverter
-func extractArrowValue(arr arrow.Array, index int, typeConverter TypeConverter) (any, error) {
-	return typeConverter.ConvertArrowToGo(arr, index)
+func extractArrowValue(arr arrow.Array, index int, typeConverter TypeConverter, field arrow.Field) (any, error) {
+	return typeConverter.ConvertArrowToGo(arr, index, field)
 }
 
 // buildArrowSchemaFromColumnTypes creates an Arrow schema from SQL column types using the type converter
