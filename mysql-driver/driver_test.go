@@ -1217,7 +1217,7 @@ func TestTemporalAndDecimalExtraction(t *testing.T) {
 
 		t.Logf("Processing batch with %d rows", rowsInBatch)
 
-		// Verify schema contains proper Arrow types for temporal/decimal data
+		// Verify schema contains proper Arrow types for /decimal data
 		schema := record.Schema()
 		require.Equal(t, 8, len(schema.Fields()), "Should have 8 columns")
 

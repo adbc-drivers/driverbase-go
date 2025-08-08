@@ -364,11 +364,10 @@ func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.
 				return arrowType, nullable, metadata, nil
 			}
 
-			// Otherwise, create Decimal128 type
+			// Otherwise, create appropriate decimal type
 			arrowType, err := arrow.NarrowestDecimalType(int32(precision), int32(scale))
 			if err != nil {
-				// Fallback to Decimal128Type
-				arrowType = &arrow.Decimal128Type{Precision: int32(precision), Scale: int32(scale)}
+				return nil, false, arrow.Metadata{}, fmt.Errorf("invalid decimal precision/scale (%d, %d): %w", precision, scale, err)
 			}
 
 			// Build metadata with decimal information
