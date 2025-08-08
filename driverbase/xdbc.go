@@ -87,3 +87,7 @@ func NullInt32ToPtr(i sql.NullInt32) *int32 {
 	}
 	return &i.Int32
 }
+
+func ToPtr[T any](i T) *T {
+	return &i
+}

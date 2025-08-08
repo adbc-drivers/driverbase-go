@@ -104,6 +104,11 @@ type DbObjectsEnumerator interface {
 	GetTablesForDBSchema(ctx context.Context, catalog string, schema string, tableFilter *string, columnFilter *string, includeColumns bool) ([]TableInfo, error)
 }
 
+// DbObjectsEnumeratorFactory generates a DbObjectsEnumerator that will be
+// used for a particular GetObjects call, allowing internally consistent
+// caching without needing global state.
+type DbObjectsEnumeratorFactory func(context.Context) (DbObjectsEnumerator, error)
+
 // Connection is the interface satisfied by the result of the NewConnection constructor,
 // given that an input is provided satisfying the ConnectionImpl interface.
 type Connection interface {
@@ -290,11 +295,11 @@ func (base *ConnectionImplBase) SetOptionInt(key string, val int64) error {
 type connection struct {
 	ConnectionImpl
 
-	dbObjectsEnumerator DbObjectsEnumerator
-	currentNamespacer   CurrentNamespacer
-	driverInfoPreparer  DriverInfoPreparer
-	tableTypeLister     TableTypeLister
-	autocommitSetter    AutocommitSetter
+	dbObjectsEnumeratorFactory DbObjectsEnumeratorFactory
+	currentNamespacer          CurrentNamespacer
+	driverInfoPreparer         DriverInfoPreparer
+	tableTypeLister            TableTypeLister
+	autocommitSetter           AutocommitSetter
 
 	concurrency int
 }
@@ -311,7 +316,17 @@ func (b *ConnectionBuilder) WithDbObjectsEnumerator(helper DbObjectsEnumerator) 
 	if b == nil {
 		panic("nil ConnectionBuilder: cannot reuse after calling Connection()")
 	}
-	b.connection.dbObjectsEnumerator = helper
+	b.connection.dbObjectsEnumeratorFactory = func(_ context.Context) (DbObjectsEnumerator, error) {
+		return helper, nil
+	}
+	return b
+}
+
+func (b *ConnectionBuilder) WithDbObjectsEnumeratorFactory(helper DbObjectsEnumeratorFactory) *ConnectionBuilder {
+	if b == nil {
+		panic("nil ConnectionBuilder: cannot reuse after calling Connection()")
+	}
+	b.connection.dbObjectsEnumeratorFactory = helper
 	return b
 }
 
@@ -397,11 +412,14 @@ func getInitialSpanAttributes(driverInfo *DriverInfo) []attribute.KeyValue {
 
 // GetObjects implements Connection.
 func (cnxn *connection) GetObjects(ctx context.Context, depth adbc.ObjectDepth, catalog *string, dbSchema *string, tableName *string, columnName *string, tableType []string) (array.RecordReader, error) {
-	helper := cnxn.dbObjectsEnumerator
-
 	// If the dbObjectsEnumerator has not been set, then the driver implementer has elected to provide their own GetObjects implementation
-	if helper == nil {
+	if cnxn.dbObjectsEnumeratorFactory == nil {
 		return cnxn.ConnectionImpl.GetObjects(ctx, depth, catalog, dbSchema, tableName, columnName, tableType)
+	}
+
+	helper, err := cnxn.dbObjectsEnumeratorFactory(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	catalogs, err := helper.GetCatalogs(ctx, catalog)
