@@ -27,7 +27,7 @@ import (
 
 // appendValue is the unified value appender that handles all Arrow builder types.
 // It uses a TypeConverter to handle SQL-to-Arrow value conversion, then appends to the builder.
-func appendValue(builder array.Builder, val any, typeConverter TypeConverter, field arrow.Field) error {
+func appendValue(builder array.Builder, val any, typeConverter TypeConverter, field *arrow.Field) error {
 	// Convert SQL value to Arrow value using TypeConverter
 	convertedVal, err := typeConverter.ConvertSQLToArrow(val, field)
 	if err != nil {
@@ -154,7 +154,7 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 	args := make([]any, n)
 	for i := 0; i < n; i++ {
 		field := rec.Schema().Field(i)
-		v, err := extractArrowValue(rec.Column(i), rowIdx, s.typeConverter, field)
+		v, err := s.typeConverter.ConvertArrowToGo(rec.Column(i), rowIdx, &field)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract parameter %d: %w", i, err)
 		}
@@ -251,7 +251,7 @@ func (s *sqlRecordReaderImpl) AppendRow(builder *array.RecordBuilder) error {
 			fieldBuilder.AppendNull()
 		} else {
 			// Use the unified appendValue function to handle type conversion
-			if err := appendValue(fieldBuilder, s.values[i], s.typeConverter, field); err != nil {
+			if err := appendValue(fieldBuilder, s.values[i], s.typeConverter, &field); err != nil {
 				return fmt.Errorf("failed to append value to column %d: %w", i, err)
 			}
 		}

@@ -17,7 +17,7 @@ module github.com/adbc-drivers/driverbase-go/sqlwrapper
 go 1.24.4
 
 require (
-	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-00010101000000-000000000000
+	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20250731064235-065e6cfecc98
 	github.com/apache/arrow-adbc/go/adbc v1.7.0
 	github.com/apache/arrow-go/v18 v18.4.0
 	github.com/stretchr/testify v1.10.0

@@ -35,14 +35,6 @@ type databaseImpl struct {
 
 // newDatabase constructs a new ADBC Database backed by *sql.DB.
 func newDatabase(ctx context.Context, driverName string, opts map[string]string, typeConverter TypeConverter) (adbc.Database, error) {
-	dsn, ok := opts[adbc.OptionKeyURI]
-	if !ok || dsn == "" {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  "missing 'uri' option in sql-wrapper",
-		}
-	}
-
 	// Initialize driverbase plumbing first to get ErrorHelper
 	info := driverbase.DefaultDriverInfo(driverName)
 	drvImpl := driverbase.NewDriverImplBase(info, memory.DefaultAllocator)
@@ -50,6 +42,11 @@ func newDatabase(ctx context.Context, driverName string, opts map[string]string,
 	base, err := driverbase.NewDatabaseImplBase(ctx, &drvImpl)
 	if err != nil {
 		return nil, drvImpl.ErrorHelper.IO("failed to initialize database base: %v", err)
+	}
+
+	dsn, ok := opts[adbc.OptionKeyURI]
+	if !ok || dsn == "" {
+		return nil, base.ErrorHelper.InvalidArgument("missing 'uri' option in sqlwrapper")
 	}
 
 	// Open the underlying SQL pool

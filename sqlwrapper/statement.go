@@ -27,7 +27,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
-// Custom option keys for the sql-wrapper
+// Custom option keys for the sqlwrapper
 const (
 	// OptionKeyBatchSize controls how many Arrow records to accumulate in a record batch
 	OptionKeyBatchSize = "adbc.statement.batch_size"
@@ -349,7 +349,7 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
 			for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
 				arr := record.Column(colIdx)
 				field := record.Schema().Field(colIdx)
-				value, err := extractArrowValue(arr, rowIdx, s.typeConverter, field)
+				value, err := s.typeConverter.ConvertArrowToGo(arr, rowIdx, &field)
 				if err != nil {
 					return totalAffected, s.Base().ErrorHelper.IO("failed to extract parameter value: %v", err)
 				}

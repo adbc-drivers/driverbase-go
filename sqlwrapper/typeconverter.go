@@ -45,12 +45,12 @@ type TypeConverter interface {
 
 	// ConvertSQLToArrow converts a SQL value to the appropriate Go value for Arrow builders
 	// The sqlValue comes from database/sql scanning, field contains the target Arrow type and metadata
-	ConvertSQLToArrow(sqlValue any, field arrow.Field) (any, error)
+	ConvertSQLToArrow(sqlValue any, field *arrow.Field) (any, error)
 
 	// ConvertArrowToGo extracts a Go value from an Arrow array at the given index
 	// This is used for parameter binding and value extraction
 	// The field parameter provides access to the Arrow field metadata
-	ConvertArrowToGo(arrowArray arrow.Array, index int, field arrow.Field) (any, error)
+	ConvertArrowToGo(arrowArray arrow.Array, index int, field *arrow.Field) (any, error)
 }
 
 // DefaultTypeConverter provides the default SQL-to-Arrow type conversion
@@ -518,7 +518,7 @@ func unwrap(val any) (any, error) {
 }
 
 // ConvertSQLToArrow implements the default SQL value to Arrow value conversion
-func (d DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, field arrow.Field) (any, error) {
+func (d DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, field *arrow.Field) (any, error) {
 	arrowType := field.Type
 	// Handle SQL nullable types first
 	unwrapped, err := unwrap(sqlValue)
@@ -592,7 +592,7 @@ func (d DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, field arrow.Field)
 }
 
 // ConvertArrowToGo implements the default Arrow value to Go value conversion
-func (d DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index int, field arrow.Field) (any, error) {
+func (d DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index int, field *arrow.Field) (any, error) {
 	if arrowArray.IsNull(index) {
 		return nil, nil
 	}
@@ -669,4 +669,22 @@ func (d DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index int
 	default:
 		return a.ValueStr(index), nil
 	}
+}
+
+// buildArrowSchemaFromColumnTypes creates an Arrow schema from SQL column types using the type converter
+func buildArrowSchemaFromColumnTypes(columnTypes []*sql.ColumnType, typeConverter TypeConverter) (*arrow.Schema, error) {
+	fields := make([]arrow.Field, len(columnTypes))
+	for i, colType := range columnTypes {
+		arrowType, nullable, metadata, err := typeConverter.ConvertColumnType(colType)
+		if err != nil {
+			return nil, err
+		}
+		fields[i] = arrow.Field{
+			Name:     colType.Name(),
+			Type:     arrowType,
+			Nullable: nullable,
+			Metadata: metadata,
+		}
+	}
+	return arrow.NewSchema(fields, nil), nil
 }
