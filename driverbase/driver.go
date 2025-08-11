@@ -1,3 +1,8 @@
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -30,17 +35,25 @@ import (
 )
 
 var (
+	// This is set by the build system
 	infoDriverVersion      string
 	infoDriverArrowVersion string
 )
 
 func init() {
 	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.modified":
+				if s.Value == "true" {
+					infoDriverVersion += "-dev"
+				}
+			}
+		}
+
 		for _, dep := range info.Deps {
 			switch {
-			case dep.Path == "github.com/apache/arrow-adbc/go/adbc":
-				infoDriverVersion = dep.Version
-			case strings.HasPrefix(dep.Path, "github.com/apache/arrow/go/"):
+			case strings.HasPrefix(dep.Path, "github.com/apache/arrow-go/"):
 				infoDriverArrowVersion = dep.Version
 			}
 		}
