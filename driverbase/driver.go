@@ -42,15 +42,8 @@ var (
 
 func init() {
 	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, s := range info.Settings {
-			switch s.Key {
-			case "vcs.modified":
-				if s.Value == "true" {
-					infoDriverVersion += "-dev"
-				}
-			}
-		}
-
+		// We could check for vcs.modified, but that triggers on
+		// untracked files, which isn't what I want
 		for _, dep := range info.Deps {
 			switch {
 			case strings.HasPrefix(dep.Path, "github.com/apache/arrow-go/"):
