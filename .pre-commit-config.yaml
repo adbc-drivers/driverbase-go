@@ -33,6 +33,12 @@ repos:
     files: ^testutil/
     types_or: [go, go-mod]
 
+  - id: golangci-lint
+    name: lint sqlwrapper
+    entry: bash -c 'cd sqlwrapper && golangci-lint run --fix --timeout 5m'
+    files: ^sqlwrapper/
+    types_or: [go, go-mod]
+
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # v5.0.0
   hooks:

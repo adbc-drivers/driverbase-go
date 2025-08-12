@@ -17,6 +17,7 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -51,7 +52,7 @@ func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driver
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
-		sqlDB.Close()
+		err = errors.Join(err, sqlDB.Close())
 		return nil, base.ErrorHelper.IO("failed to ping database: %v", err)
 	}
 

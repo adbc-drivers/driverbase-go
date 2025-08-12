@@ -187,6 +187,13 @@ func convertToDate32(val any) (arrow.Date32, error) {
 	switch v := val.(type) {
 	case time.Time:
 		return arrow.Date32FromTime(v), nil
+	case []byte:
+		layout := "2006-01-02"
+		t, err := time.Parse(layout, string(v))
+		if err != nil {
+			return 0, fmt.Errorf("cannot parse date from %v: %w", string(v), err)
+		}
+		return arrow.Date32FromTime(t), nil
 	default:
 		return 0, fmt.Errorf("cannot convert %T to Date32, expected time.Time", val)
 	}
@@ -488,7 +495,7 @@ func mapSQLTypeNameToArrowType(typeName string) arrow.DataType {
 
 	// Date/time types
 	case "DATE":
-		return arrow.FixedWidthTypes.Date64
+		return arrow.FixedWidthTypes.Date32
 
 	// Boolean type
 	case "BOOLEAN", "BOOL":

@@ -17,14 +17,14 @@ module github.com/adbc-drivers/driverbase-go/sqlwrapper
 go 1.24.4
 
 require (
-	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20250811062117-e923dd1b0b5b
+	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20250812031148-e2a26ef1320d
 	github.com/apache/arrow-adbc/go/adbc v1.7.0
 	github.com/apache/arrow-go/v18 v18.4.0
 	golang.org/x/exp v0.0.0-20250811191247-51f88131bc50
 )
 
 require (
-	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-20250811062117-e923dd1b0b5b // indirect
+	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-20250812031148-e2a26ef1320d // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/apache/thrift v0.22.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -65,3 +65,7 @@ require (
 	google.golang.org/grpc v1.74.2 // indirect
 	google.golang.org/protobuf v1.36.7 // indirect
 )
+
+replace github.com/adbc-drivers/driverbase-go/driverbase => ../driverbase
+
+replace github.com/adbc-drivers/driverbase-go/testutil => ../testutil
