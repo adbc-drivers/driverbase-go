@@ -20,7 +20,6 @@ import (
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // databaseImpl implements the ADBC Database interface on top of database/sql.
@@ -34,12 +33,8 @@ type databaseImpl struct {
 }
 
 // newDatabase constructs a new ADBC Database backed by *sql.DB.
-func newDatabase(ctx context.Context, driverName string, opts map[string]string, typeConverter TypeConverter) (adbc.Database, error) {
-	// Initialize driverbase plumbing first to get ErrorHelper
-	info := driverbase.DefaultDriverInfo(driverName)
-	drvImpl := driverbase.NewDriverImplBase(info, memory.DefaultAllocator)
-
-	base, err := driverbase.NewDatabaseImplBase(ctx, &drvImpl)
+func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driverName string, opts map[string]string, typeConverter TypeConverter) (adbc.Database, error) {
+	base, err := driverbase.NewDatabaseImplBase(ctx, drvImpl)
 	if err != nil {
 		return nil, drvImpl.ErrorHelper.IO("failed to initialize database base: %v", err)
 	}

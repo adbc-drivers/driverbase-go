@@ -17,23 +17,30 @@ package sqlwrapper
 import (
 	"context"
 
+	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // Driver provides an ADBC driver implementation that wraps database/sql drivers.
 // It uses a configurable TypeConverter for SQL-to-Arrow type mapping and conversion.
 type Driver struct {
+	driverbase.DriverImplBase
 	driverName    string
 	typeConverter TypeConverter
 }
 
 // NewDriver creates a new sqlwrapper Driver with driver name and optional type converter.
 // If converter is nil, uses DefaultTypeConverter.
-func NewDriver(driverName string, converter TypeConverter) *Driver {
+func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter TypeConverter) *Driver {
 	if converter == nil {
 		converter = DefaultTypeConverter{}
 	}
+	info := driverbase.DefaultDriverInfo(vendorName)
+	base := driverbase.NewDriverImplBase(info, alloc)
+	base.ErrorHelper.DriverName = driverName
 	return &Driver{
+		DriverImplBase: base,
 		driverName:    driverName,
 		typeConverter: converter,
 	}
@@ -47,5 +54,5 @@ func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
 
 // NewDatabaseWithContext is the same, but lets you pass in a context.
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	return newDatabase(ctx, d.driverName, opts, d.typeConverter)
+	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter)
 }
