@@ -41,8 +41,8 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter 
 	base.ErrorHelper.DriverName = driverName
 	return &Driver{
 		DriverImplBase: base,
-		driverName:    driverName,
-		typeConverter: converter,
+		driverName:     driverName,
+		typeConverter:  converter,
 	}
 }
 

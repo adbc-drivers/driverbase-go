@@ -17,6 +17,7 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -58,7 +59,7 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 
 // newStatement constructs a new statementImpl wrapped by driverbase
 func newStatement(c *connectionImpl) adbc.Statement {
-	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ConnectionImplBase.ErrorHelper)
+	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: base,
 		conn:              c.conn,
@@ -71,7 +72,9 @@ func newStatement(c *connectionImpl) adbc.Statement {
 func (s *statementImpl) SetSqlQuery(query string) error {
 	// if someone resets the SQL after Prepare, clean up the old stmt
 	if s.stmt != nil {
-		s.stmt.Close()
+		if err := s.stmt.Close(); err != nil {
+			return s.Base().ErrorHelper.IO("failed to close prepared statement: %v", err)
+		}
 		s.stmt = nil
 	}
 	s.query = query
@@ -163,7 +166,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 }
 
 // ExecuteSchema returns the Arrow schema by querying zero rows
-func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error) {
+func (s *statementImpl) ExecuteSchema(ctx context.Context) (schema *arrow.Schema, err error) {
 	if s.query == "" {
 		return nil, s.Base().ErrorHelper.InvalidArgument("no query set")
 	}
@@ -172,15 +175,15 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error
 	limitQuery := fmt.Sprintf("SELECT * FROM (%s) AS subquery LIMIT 0", s.query)
 
 	var rows *sql.Rows
-	var err error
 
 	// Can't use prepared statement with modified query, fall back to direct execution
 	rows, err = s.conn.QueryContext(ctx, limitQuery)
-
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		err = errors.Join(err, rows.Close())
+	}()
 
 	// Get column type information
 	columnTypes, err := rows.ColumnTypes()
@@ -216,14 +219,14 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	// Get column type information for schema
 	columnTypes, err := rows.ColumnTypes()
 	if err != nil {
-		rows.Close()
+		err = errors.Join(err, rows.Close())
 		return nil, -1, s.Base().ErrorHelper.IO("failed to get column types: %v", err)
 	}
 
 	// Build Arrow schema
 	schema, err := buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
 	if err != nil {
-		rows.Close()
+		err = errors.Join(err, rows.Close())
 		return nil, -1, s.Base().ErrorHelper.IO("failed to build Arrow schema: %v", err)
 	}
 
@@ -241,7 +244,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 
 	reader := &driverbase.BaseRecordReader{}
 	if err := reader.Init(ctx, memory.DefaultAllocator, nil, int64(s.batchSize), impl); err != nil {
-		rows.Close()
+		err = errors.Join(err, rows.Close())
 		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)
 	}
 
@@ -286,7 +289,9 @@ func (s *statementImpl) Prepare(ctx context.Context) (err error) {
 
 	// Close old statement if it exists
 	if s.stmt != nil {
-		s.stmt.Close()
+		if err = s.stmt.Close(); err != nil {
+			return s.Base().ErrorHelper.IO("failed to close statement: %v", err)
+		}
 		s.stmt = nil
 	}
 
@@ -312,15 +317,13 @@ func (s *statementImpl) SetSubstraitPlan([]byte) error {
 }
 
 // executeBulkUpdate executes bulk updates by iterating through the bound stream directly
-func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
+func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected int64, err error) {
 	if s.query == "" {
 		return -1, s.Base().ErrorHelper.InvalidArgument("no query set")
 	}
 
 	// Prepare statement if needed
 	var stmt *sql.Stmt
-	var err error
-
 	if s.stmt != nil {
 		stmt = s.stmt
 	} else {
@@ -328,23 +331,15 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
 		if err != nil {
 			return -1, s.Base().ErrorHelper.IO("failed to prepare statement for batch execution: %v", err)
 		}
-		defer stmt.Close()
+		defer func() {
+			err = errors.Join(err, stmt.Close())
+		}()
 	}
 
-	var totalAffected int64
-
-	// Process the bound stream - records are already properly batched by BaseRecordReader
+	params := make([]any, s.boundStream.Schema().NumFields())
 	for s.boundStream.Next() {
 		record := s.boundStream.Record()
-		if record == nil {
-			continue
-		}
-
-		// Process all rows in this Arrow record (it's already the correct batch size)
-		numRows := int(record.NumRows())
-		for rowIdx := range numRows {
-			// Extract parameters for this row
-			params := make([]any, record.NumCols())
+		for rowIdx := range int(record.NumRows()) {
 			for colIdx := range int(record.NumCols()) {
 				arr := record.Column(colIdx)
 				field := record.Schema().Field(colIdx)
@@ -355,7 +350,6 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
 				params[colIdx] = value
 			}
 
-			// Execute with parameters
 			result, err := stmt.ExecContext(ctx, params...)
 			if err != nil {
 				return totalAffected, s.Base().ErrorHelper.IO("failed to execute statement: %v", err)

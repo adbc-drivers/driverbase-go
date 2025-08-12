@@ -37,7 +37,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 	// Acquire a dedicated session
 	sqlConn, err := db.db.Conn(ctx)
 	if err != nil {
-		return nil, db.DatabaseImplBase.ErrorHelper.IO("failed to acquire database connection: %v", err)
+		return nil, db.ErrorHelper.IO("failed to acquire database connection: %v", err)
 	}
 
 	// Set up the driverbase plumbing

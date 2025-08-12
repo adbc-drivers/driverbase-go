@@ -17,6 +17,7 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -145,7 +146,9 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 
 	// Close any previous result set
 	if s.rows != nil {
-		s.rows.Close()
+		if err := s.rows.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close previous result set: %w", err)
+		}
 		s.rows = nil
 	}
 
@@ -176,14 +179,14 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 	// Get column type information for the new result set
 	columnTypes, err := rows.ColumnTypes()
 	if err != nil {
-		rows.Close()
+		err = errors.Join(err, rows.Close())
 		return nil, fmt.Errorf("failed to get column types: %w", err)
 	}
 
 	// Build Arrow schema from column types
 	schema, err := buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
 	if err != nil {
-		rows.Close()
+		err = errors.Join(err, rows.Close())
 		return nil, fmt.Errorf("failed to build Arrow schema: %w", err)
 	}
 
