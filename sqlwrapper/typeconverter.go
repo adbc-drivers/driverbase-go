@@ -178,7 +178,7 @@ func convertToBinary(val any) ([]byte, error) {
 	case []byte:
 		return v, nil
 	default:
-		return []byte(fmt.Sprintf("%v", val)), nil
+		return fmt.Appendf(nil, "%v", val), nil
 	}
 }
 
@@ -425,7 +425,7 @@ func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.
 	}
 
 	// For all other types, use the existing conversion with already-parsed values
-	arrowType := mapSQLTypeNameToArrowType(typeName, nullable)
+	arrowType := mapSQLTypeNameToArrowType(typeName)
 
 	// Build metadata with original SQL type information
 	metadataMap := map[string]string{
@@ -450,8 +450,7 @@ func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.
 }
 
 // sqlTypeToArrow converts SQL type name to Arrow data type using pre-parsed values
-func mapSQLTypeNameToArrowType(typeName string, nullable bool) arrow.DataType {
-
+func mapSQLTypeNameToArrowType(typeName string) arrow.DataType {
 	switch typeName {
 	// Integer types
 	case "INT", "INTEGER", "MEDIUMINT":

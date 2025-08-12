@@ -239,7 +239,6 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	}
 	impl.ensureValueBuffers(len(columnTypes))
 
-	// Use BaseRecordReader.Init() as the proper initialization method
 	reader := &driverbase.BaseRecordReader{}
 	if err := reader.Init(ctx, memory.DefaultAllocator, nil, int64(s.batchSize), impl); err != nil {
 		rows.Close()
@@ -343,10 +342,10 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (int64, error) {
 
 		// Process all rows in this Arrow record (it's already the correct batch size)
 		numRows := int(record.NumRows())
-		for rowIdx := 0; rowIdx < numRows; rowIdx++ {
+		for rowIdx := range numRows {
 			// Extract parameters for this row
 			params := make([]any, record.NumCols())
-			for colIdx := 0; colIdx < int(record.NumCols()); colIdx++ {
+			for colIdx := range int(record.NumCols()) {
 				arr := record.Column(colIdx)
 				field := record.Schema().Field(colIdx)
 				value, err := s.typeConverter.ConvertArrowToGo(arr, rowIdx, &field)
