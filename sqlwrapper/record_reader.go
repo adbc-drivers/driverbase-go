@@ -152,7 +152,7 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 	// Extract parameters from the Arrow record for this row
 	n := int(rec.NumCols())
 	args := make([]any, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		field := rec.Schema().Field(i)
 		v, err := s.typeConverter.ConvertArrowToGo(rec.Column(i), rowIdx, &field)
 		if err != nil {
@@ -243,7 +243,7 @@ func (s *sqlRecordReaderImpl) AppendRow(builder *array.RecordBuilder) error {
 	}
 
 	// Append each column value to its corresponding Arrow builder
-	for i := 0; i < len(s.values); i++ {
+	for i := range len(s.values) {
 		fieldBuilder := builder.Field(i)
 		field := s.schema.Field(i)
 		if s.values[i] == nil {
