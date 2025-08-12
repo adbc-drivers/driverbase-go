@@ -205,8 +205,6 @@
 
 This project includes code from Apache Arrow ADBC.
 
-* driverbase/ contains code from ADBC.
-
 Copyright: 2022 The Apache Software Foundation.
 Home page: https://arrow.apache.org/adbc/
 License: http://www.apache.org/licenses/LICENSE-2.0
