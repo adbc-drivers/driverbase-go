@@ -291,10 +291,10 @@ func parseTime64FromString(s string) (arrow.Time64, error) {
 
 	for _, layout := range layouts {
 		if t, err := time.Parse(layout, s); err == nil {
-			return arrow.Time64(t.Hour())*3600_000_000_000 +
-				arrow.Time64(t.Minute())*60_000_000_000 +
-				arrow.Time64(t.Second())*1_000_000_000 +
-				arrow.Time64(t.Nanosecond()), nil
+			return arrow.Time64(t.Hour())*3600_000_000 +
+				arrow.Time64(t.Minute())*60_000_000 +
+				arrow.Time64(t.Second())*1_000_000 +
+				arrow.Time64(t.Nanosecond()/1000), nil
 		}
 	}
 	return 0, fmt.Errorf("could not parse time string: %q", s)
