@@ -238,31 +238,12 @@ func convertToTime32(val any) (arrow.Time32, error) {
 		// Convert to time since midnight - assume milliseconds for Time32
 		return arrow.Time32(v.Hour()*3600000 + v.Minute()*60000 + v.Second()*1000 + v.Nanosecond()/1000000), nil
 	case []byte:
-		return parseTimeOnly(string(v))
+		return arrow.Time32FromString(string(v), arrow.Millisecond)
 	case string:
-		return parseTimeOnly(v)
+		return arrow.Time32FromString(v, arrow.Millisecond)
 	default:
 		return 0, fmt.Errorf("cannot convert %T to Time32, expected time.Time", val)
 	}
-}
-
-func parseTimeOnly(s string) (arrow.Time32, error) {
-	layouts := []string{
-		"15:04:05",
-		"15:04:05.999",
-		"15:04:05.999999",
-		"15:04",
-	}
-
-	for _, layout := range layouts {
-		if t, err := time.Parse(layout, s); err == nil {
-			// Convert time-of-day to milliseconds since midnight
-			ms := t.Hour()*3600000 + t.Minute()*60000 + t.Second()*1000 + t.Nanosecond()/1_000_000
-			return arrow.Time32(ms), nil
-		}
-	}
-
-	return 0, fmt.Errorf("could not parse time-only string: %q", s)
 }
 
 // convertToTime64 converts a SQL value to arrow.Time64 type
@@ -272,32 +253,12 @@ func convertToTime64(val any) (arrow.Time64, error) {
 		// Convert to time since midnight - assume microseconds for Time64
 		return arrow.Time64(v.Hour()*3600000000 + v.Minute()*60000000 + v.Second()*1000000 + v.Nanosecond()/1000), nil
 	case []byte:
-		return parseTime64FromString(string(v))
+		return arrow.Time64FromString(string(v), arrow.Microsecond)
 	case string:
-		return parseTime64FromString(v)
+		return arrow.Time64FromString(v, arrow.Microsecond)
 	default:
 		return 0, fmt.Errorf("cannot convert %T to Time64, expected time.Time", val)
 	}
-}
-
-func parseTime64FromString(s string) (arrow.Time64, error) {
-	// parse time using common layouts
-	layouts := []string{
-		"15:04:05",
-		"15:04:05.999999999",
-		"15:04:05.999999",
-		"15:04:05.999",
-	}
-
-	for _, layout := range layouts {
-		if t, err := time.Parse(layout, s); err == nil {
-			return arrow.Time64(t.Hour())*3600_000_000_000 +
-				arrow.Time64(t.Minute())*60_000_000_000 +
-				arrow.Time64(t.Second())*1_000_000_000 +
-				arrow.Time64(t.Nanosecond()), nil
-		}
-	}
-	return 0, fmt.Errorf("could not parse time string: %q", s)
 }
 
 // convertToTimestamp converts a SQL value to time.Time for TimestampBuilder.AppendTime
@@ -306,31 +267,14 @@ func convertToTimestamp(val any) (time.Time, error) {
 	case time.Time:
 		return v, nil
 	case []byte:
-		return parseTime(string(v))
+		ts, err := arrow.TimestampFromString(string(v), arrow.Microsecond)
+		return ts.ToTime(arrow.Microsecond), err
 	case string:
-		return parseTime(v)
+		ts, err := arrow.TimestampFromString(v, arrow.Microsecond)
+		return ts.ToTime(arrow.Microsecond), err
 	default:
 		return time.Time{}, fmt.Errorf("cannot convert %T to timestamp, expected time.Time", val)
 	}
-}
-
-func parseTime(s string) (time.Time, error) {
-	// Common layouts used by databases (RFC3339 is common in Arrow)
-	layouts := []string{
-		time.RFC3339,                  // "2006-01-02T15:04:05Z07:00"
-		"2006-01-02 15:04:05",         // MySQL/PostgreSQL common format
-		"2006-01-02",                  // Date only
-		"2006-01-02 15:04:05.999999",  // With microseconds
-		"2006-01-02T15:04:05.999999Z", // ISO-like
-	}
-
-	for _, layout := range layouts {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-
-	return time.Time{}, fmt.Errorf("could not parse timestamp string: %q", s)
 }
 
 // convertToDecimalString converts a SQL value to string for decimal AppendValueFromString
