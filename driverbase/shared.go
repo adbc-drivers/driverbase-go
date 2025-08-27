@@ -15,7 +15,6 @@
 package driverbase
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -35,25 +34,6 @@ func NewShared[T any](handle *T, closer io.Closer) *Shared[T] {
 		handle: handle,
 		closer: closer,
 	}
-}
-
-func (sh *Shared[T]) Close() error {
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-
-	if sh.handle == nil {
-		return nil
-	}
-
-	if err := sh.closer.Close(); err != nil {
-		return errors.Join(adbc.Error{
-			Code: adbc.StatusInternal,
-			Msg:  fmt.Sprintf("[driverbase] Shared[%T].Close: failed to close resource: %s", *new(T), err),
-		}, err)
-	}
-	sh.handle = nil
-	sh.closer = nil
-	return nil
 }
 
 // Hold gets exclusive access to the connection until the returned handle is released.

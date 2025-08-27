@@ -152,6 +152,14 @@ func (di *DriverInfo) RegisterInfoCode(code adbc.InfoCode, value any) error {
 	return err
 }
 
+func (di *DriverInfo) MustRegister(codes map[adbc.InfoCode]any) {
+	for code, value := range codes {
+		if err := di.RegisterInfoCode(code, value); err != nil {
+			panic(err)
+		}
+	}
+}
+
 func (di *DriverInfo) GetInfoForInfoCode(code adbc.InfoCode) (any, bool) {
 	val, ok := di.info[code]
 	return val, ok

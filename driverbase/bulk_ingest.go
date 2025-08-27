@@ -99,6 +99,17 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 		default:
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid statement option %s=%s", key, val)
 		}
+	case adbc.OptionValueIngestTemporary:
+		switch val {
+		case adbc.OptionValueEnabled:
+			options.Temporary = true
+			options.SchemaName = ""
+			options.CatalogName = ""
+		case adbc.OptionValueDisabled:
+			options.Temporary = false
+		default:
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid statement option %s=%s", key, val)
+		}
 	default:
 		return false, nil
 	}
