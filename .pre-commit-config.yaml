@@ -28,6 +28,12 @@ repos:
     types_or: [go, go-mod]
 
   - id: golangci-lint
+    name: lint driverbase (assert)
+    entry: bash -c 'cd driverbase && golangci-lint run --build-tags=assert --fix --timeout 5m'
+    files: ^driverbase/
+    types_or: [go, go-mod]
+
+  - id: golangci-lint
     name: lint testutil
     entry: bash -c 'cd testutil && golangci-lint run --fix --timeout 5m'
     files: ^testutil/
