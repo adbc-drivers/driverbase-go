@@ -88,6 +88,10 @@ func (c *ConnectionImpl) SetOption(key, value string) error {
 	return c.ConnectionImplBase.SetOption(key, value)
 }
 
+func (c *ConnectionImpl) GetOption(key string) (string, error) {
+	return c.ConnectionImplBase.GetOption(key)
+}
+
 // Commit is a no-op under auto-commit mode
 // TODO (https://github.com/adbc-drivers/driverbase-go/issues/28): we'll likely want to utilize https://pkg.go.dev/database/sql#Tx
 // to manage this here
