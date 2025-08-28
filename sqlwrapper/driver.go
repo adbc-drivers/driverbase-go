@@ -16,18 +16,35 @@ package sqlwrapper
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
+// ConnectionFactory allows custom connection implementations to be injected into sqlwrapper.
+// Implementations can provide database-specific functionality like DbObjectsEnumerator.
+type ConnectionFactory interface {
+	// CreateConnection creates a custom connection implementation.
+	// It receives the base connection components and should return a connection
+	// that embeds or wraps the provided ConnectionImplBase.
+	CreateConnection(
+		ctx context.Context,
+		base driverbase.ConnectionImplBase,
+		sqlConn *sql.Conn,
+		typeConverter TypeConverter,
+		sqlDB *sql.DB,
+	) (driverbase.ConnectionImpl, error)
+}
+
 // Driver provides an ADBC driver implementation that wraps database/sql drivers.
 // It uses a configurable TypeConverter for SQL-to-Arrow type mapping and conversion.
 type Driver struct {
 	driverbase.DriverImplBase
-	driverName    string
-	typeConverter TypeConverter
+	driverName        string
+	typeConverter     TypeConverter
+	connectionFactory ConnectionFactory
 }
 
 // NewDriver creates a new sqlwrapper Driver with driver name and optional type converter.
@@ -40,10 +57,19 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter 
 	base := driverbase.NewDriverImplBase(info, alloc)
 	base.ErrorHelper.DriverName = driverName
 	return &Driver{
-		DriverImplBase: base,
-		driverName:     driverName,
-		typeConverter:  converter,
+		DriverImplBase:    base,
+		driverName:        driverName,
+		typeConverter:     converter,
+		connectionFactory: nil, // No custom factory by default
 	}
+}
+
+// WithConnectionFactory sets a custom connection factory for this driver.
+// This allows database-specific drivers to provide custom connection implementations
+// with additional functionality like DbObjectsEnumerator.
+func (d *Driver) WithConnectionFactory(factory ConnectionFactory) *Driver {
+	d.connectionFactory = factory
+	return d
 }
 
 // NewDatabase is the main entrypoint for driver‐agnostic ADBC database creation.
@@ -54,5 +80,5 @@ func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
 
 // NewDatabaseWithContext is the same, but lets you pass in a context.
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter)
+	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter, d.connectionFactory)
 }

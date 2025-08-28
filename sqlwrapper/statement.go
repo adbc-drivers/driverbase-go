@@ -28,10 +28,14 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
-// Custom option keys for the sqlwrapper
+// ADBC option keys - using official ADBC constants where available
 const (
 	// OptionKeyBatchSize controls how many Arrow records to accumulate in a record batch
 	OptionKeyBatchSize = "adbc.statement.batch_size"
+	// OptionKeyTargetTable specifies the target table for bulk ingest operations
+	OptionKeyTargetTable = "adbc.ingest.target_table"
+	// OptionKeyIngestMode specifies the ingest mode (create, append, replace, create_append)
+	OptionKeyIngestMode = "adbc.ingest.mode"
 )
 
 // statementImpl implements the ADBC Statement interface on top of database/sql.
@@ -48,6 +52,10 @@ type statementImpl struct {
 	boundStream array.RecordReader
 	// batchSize controls how many records to process at once during streaming execution
 	batchSize int
+	// targetTable holds the target table name for bulk ingest operations
+	targetTable string
+	// ingestMode holds the ingest mode (create, append, replace, create_append)
+	ingestMode string
 	// typeConverter handles SQL-to-Arrow type conversion
 	typeConverter TypeConverter
 }
@@ -58,13 +66,14 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 }
 
 // newStatement constructs a new statementImpl wrapped by driverbase
-func newStatement(c *connectionImpl) adbc.Statement {
+func newStatement(c *ConnectionImpl) adbc.Statement {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: base,
-		conn:              c.conn,
-		batchSize:         1000, // Default batch size for streaming operations
-		typeConverter:     c.typeConverter,
+		conn:              c.Conn,
+		batchSize:         1000,                      // Default batch size for streaming operations
+		ingestMode:        "adbc.ingest.mode.create", // Default ingest mode
+		typeConverter:     c.TypeConverter,
 	})
 }
 
@@ -77,6 +86,13 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 		}
 		s.stmt = nil
 	}
+
+	// Clear any bound parameters when setting a new query
+	if s.boundStream != nil {
+		s.boundStream.Release()
+		s.boundStream = nil
+	}
+
 	s.query = query
 	return nil
 }
@@ -90,6 +106,19 @@ func (s *statementImpl) SetOption(key, val string) error {
 			return s.Base().ErrorHelper.InvalidArgument("invalid batch size: %v", err)
 		}
 		return s.SetBatchSize(size)
+	case OptionKeyTargetTable:
+		s.targetTable = val
+		return nil
+	case OptionKeyIngestMode:
+		// Validate ingest mode using ADBC constants
+		switch val {
+		case "adbc.ingest.mode.create", "adbc.ingest.mode.append",
+			"adbc.ingest.mode.replace", "adbc.ingest.mode.create_append":
+			s.ingestMode = val
+			return nil
+		default:
+			return s.Base().ErrorHelper.InvalidArgument("invalid ingest mode: %s", val)
+		}
 	default:
 		return s.Base().ErrorHelper.NotImplemented("unsupported option: %s", key)
 	}

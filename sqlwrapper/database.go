@@ -31,10 +31,12 @@ type databaseImpl struct {
 	db *sql.DB
 	// typeConverter handles SQL-to-Arrow type conversion
 	typeConverter TypeConverter
+	// connectionFactory creates custom connection implementations if provided
+	connectionFactory ConnectionFactory
 }
 
 // newDatabase constructs a new ADBC Database backed by *sql.DB.
-func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driverName string, opts map[string]string, typeConverter TypeConverter) (adbc.Database, error) {
+func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driverName string, opts map[string]string, typeConverter TypeConverter, connectionFactory ConnectionFactory) (adbc.Database, error) {
 	base, err := driverbase.NewDatabaseImplBase(ctx, drvImpl)
 	if err != nil {
 		return nil, drvImpl.ErrorHelper.IO("failed to initialize database base: %v", err)
@@ -58,9 +60,10 @@ func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driver
 
 	// Construct and return the ADBC Database wrapper
 	db := &databaseImpl{
-		DatabaseImplBase: base,
-		db:               sqlDB,
-		typeConverter:    typeConverter,
+		DatabaseImplBase:  base,
+		db:                sqlDB,
+		typeConverter:     typeConverter,
+		connectionFactory: connectionFactory,
 	}
 	return driverbase.NewDatabase(db), nil
 }
