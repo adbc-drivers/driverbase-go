@@ -70,6 +70,10 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 		builder = builder.WithDbObjectsEnumerator(enumerator)
 	}
 
+	if namespacer, ok := any(impl).(driverbase.CurrentNamespacer); ok {
+		builder = builder.WithCurrentNamespacer(namespacer)
+	}
+
 	return builder.Connection(), nil
 }
 
