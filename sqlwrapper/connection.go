@@ -85,37 +85,7 @@ func (c *ConnectionImpl) SetTypeConverter(converter TypeConverter) {
 
 // SetOption sets a string option on this connection
 func (c *ConnectionImpl) SetOption(key, value string) error {
-	switch key {
-	case "adbc.connection.catalog", "adbc.connection.db_schema":
-		// In MySQL, catalog and schema are the same (database name)
-		_, err := c.Conn.ExecContext(context.Background(), "USE "+value)
-		if err != nil {
-			return c.Base().ErrorHelper.IO("failed to change database to %s: %v", value, err)
-		}
-		return nil
-	default:
-		return c.ConnectionImplBase.SetOption(key, value)
-	}
-}
-
-// GetOption gets a string option from this connection
-func (c *ConnectionImpl) GetOption(key string) (string, error) {
-	switch key {
-	case "adbc.connection.catalog", "adbc.connection.db_schema":
-		// In MySQL, catalog and schema are the same (database name)
-		var database string
-		err := c.Conn.QueryRowContext(context.Background(), "SELECT DATABASE()").Scan(&database)
-		if err != nil {
-			return "", c.Base().ErrorHelper.IO("failed to get current database: %v", err)
-		}
-		// Handle NULL case (no database selected)
-		if database == "" {
-			return "", c.Base().ErrorHelper.Errorf(adbc.StatusNotFound, "no current database set")
-		}
-		return database, nil
-	default:
-		return c.ConnectionImplBase.GetOption(key)
-	}
+	return c.ConnectionImplBase.SetOption(key, value)
 }
 
 // Commit is a no-op under auto-commit mode
