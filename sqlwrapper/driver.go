@@ -16,7 +16,6 @@ package sqlwrapper
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -27,14 +26,11 @@ import (
 // Implementations can provide database-specific functionality like DbObjectsEnumerator.
 type ConnectionFactory interface {
 	// CreateConnection creates a custom connection implementation.
-	// It receives the base connection components and should return a connection
-	// that embeds or wraps the provided ConnectionImplBase.
+	// It receives a pre-built sqlwrapper ConnectionImpl and should return a connection
+	// that embeds or wraps it to add database-specific functionality.
 	CreateConnection(
 		ctx context.Context,
-		base driverbase.ConnectionImplBase,
-		sqlConn *sql.Conn,
-		typeConverter TypeConverter,
-		sqlDB *sql.DB,
+		conn *ConnectionImpl,
 	) (driverbase.ConnectionImpl, error)
 }
 

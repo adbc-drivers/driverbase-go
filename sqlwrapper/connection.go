@@ -31,6 +31,8 @@ type ConnectionImpl struct {
 	Conn *sql.Conn
 	// TypeConverter handles SQL-to-Arrow type conversion
 	TypeConverter TypeConverter
+	// db is the underlying database for metadata operations
+	db *sql.DB
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
@@ -44,22 +46,26 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 	// Set up the driverbase plumbing
 	base := driverbase.NewConnectionImplBase(&db.DatabaseImplBase)
 
+	// Create the base sqlwrapper connection first
+	sqlwrapperConn := &ConnectionImpl{
+		ConnectionImplBase: base,
+		Conn:               sqlConn,
+		TypeConverter:      db.typeConverter,
+		db:                 db.db,
+	}
+
 	var impl driverbase.ConnectionImpl
 
 	// Use custom factory if provided, otherwise use default implementation
 	if db.connectionFactory != nil {
-		impl, err = db.connectionFactory.CreateConnection(ctx, base, sqlConn, db.typeConverter, db.db)
+		impl, err = db.connectionFactory.CreateConnection(ctx, sqlwrapperConn)
 		if err != nil {
 			err = errors.Join(err, sqlConn.Close())
 			return nil, err
 		}
 	} else {
 		// Default sqlwrapper connection implementation
-		impl = &ConnectionImpl{
-			ConnectionImplBase: base,
-			Conn:               sqlConn,
-			TypeConverter:      db.typeConverter,
-		}
+		impl = sqlwrapperConn
 	}
 
 	// Build and return the ADBC Connection wrapper
@@ -85,6 +91,12 @@ func (c *ConnectionImpl) NewStatement() (adbc.Statement, error) {
 // SetTypeConverter allows higher-level drivers to customize type conversion
 func (c *ConnectionImpl) SetTypeConverter(converter TypeConverter) {
 	c.TypeConverter = converter
+}
+
+// GetDB exposes the underlying *sql.DB for drivers that need direct database access
+// for metadata operations or custom functionality
+func (c *ConnectionImpl) GetDB() *sql.DB {
+	return c.db
 }
 
 // SetOption sets a string option on this connection
