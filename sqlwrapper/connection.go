@@ -17,19 +17,22 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 )
 
-// connectionImpl implements the ADBC Connection interface on top of database/sql.
-type connectionImpl struct {
+// ConnectionImpl implements the ADBC Connection interface on top of database/sql.
+type ConnectionImpl struct {
 	driverbase.ConnectionImplBase
 
-	// conn is the dedicated SQL connection for this ADBC session
-	conn *sql.Conn
-	// typeConverter handles SQL-to-Arrow type conversion
-	typeConverter TypeConverter
+	// Conn is the dedicated SQL connection for this ADBC session
+	Conn *sql.Conn
+	// TypeConverter handles SQL-to-Arrow type conversion
+	TypeConverter TypeConverter
+	// db is the underlying database for metadata operations
+	Db *sql.DB
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
@@ -42,36 +45,67 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 
 	// Set up the driverbase plumbing
 	base := driverbase.NewConnectionImplBase(&db.DatabaseImplBase)
-	impl := &connectionImpl{
+
+	// Create the base sqlwrapper connection first
+	sqlwrapperConn := &ConnectionImpl{
 		ConnectionImplBase: base,
-		conn:               sqlConn,
-		typeConverter:      db.typeConverter, // Use the type converter from the database
+		Conn:               sqlConn,
+		TypeConverter:      db.typeConverter,
+		Db:                 db.db,
+	}
+
+	var impl driverbase.ConnectionImpl
+
+	// Use custom factory if provided, otherwise use default implementation
+	if db.connectionFactory != nil {
+		impl, err = db.connectionFactory.CreateConnection(ctx, sqlwrapperConn)
+		if err != nil {
+			err = errors.Join(err, sqlConn.Close())
+			return nil, err
+		}
+	} else {
+		// Default sqlwrapper connection implementation
+		impl = sqlwrapperConn
 	}
 
 	// Build and return the ADBC Connection wrapper
 	builder := driverbase.NewConnectionBuilder(impl)
+
+	// If impl supports DbObjectsEnumerator, register it
+	if enumerator, ok := any(impl).(driverbase.DbObjectsEnumerator); ok {
+		builder = builder.WithDbObjectsEnumerator(enumerator)
+	}
+
+	if namespacer, ok := any(impl).(driverbase.CurrentNamespacer); ok {
+		builder = builder.WithCurrentNamespacer(namespacer)
+	}
+
 	return builder.Connection(), nil
 }
 
 // NewStatement satisfies adbc.Connection
-func (c *connectionImpl) NewStatement() (adbc.Statement, error) {
+func (c *ConnectionImpl) NewStatement() (adbc.Statement, error) {
 	return newStatement(c), nil
 }
 
 // SetTypeConverter allows higher-level drivers to customize type conversion
-func (c *connectionImpl) SetTypeConverter(converter TypeConverter) {
-	c.typeConverter = converter
+func (c *ConnectionImpl) SetTypeConverter(converter TypeConverter) {
+	c.TypeConverter = converter
 }
 
 // SetOption sets a string option on this connection
-func (c *connectionImpl) SetOption(key, value string) error {
+func (c *ConnectionImpl) SetOption(key, value string) error {
 	return c.ConnectionImplBase.SetOption(key, value)
+}
+
+func (c *ConnectionImpl) GetOption(key string) (string, error) {
+	return c.ConnectionImplBase.GetOption(key)
 }
 
 // Commit is a no-op under auto-commit mode
 // TODO (https://github.com/adbc-drivers/driverbase-go/issues/28): we'll likely want to utilize https://pkg.go.dev/database/sql#Tx
 // to manage this here
-func (c *connectionImpl) Commit(ctx context.Context) error {
+func (c *ConnectionImpl) Commit(ctx context.Context) error {
 	return c.Base().ErrorHelper.Errorf(
 		adbc.StatusNotImplemented,
 		"Commit not supported in auto-commit mode",
@@ -81,7 +115,7 @@ func (c *connectionImpl) Commit(ctx context.Context) error {
 // Rollback is a no-op under auto-commit mode
 // TODO (https://github.com/adbc-drivers/driverbase-go/issues/28): we'll likely want to utilize https://pkg.go.dev/database/sql#Tx
 // to manage this here
-func (c *connectionImpl) Rollback(ctx context.Context) error {
+func (c *ConnectionImpl) Rollback(ctx context.Context) error {
 	return c.Base().ErrorHelper.Errorf(
 		adbc.StatusNotImplemented,
 		"Rollback not supported in auto-commit mode",
@@ -89,6 +123,6 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 }
 
 // Close closes the underlying SQL connection
-func (c *connectionImpl) Close() error {
-	return c.conn.Close()
+func (c *ConnectionImpl) Close() error {
+	return c.Conn.Close()
 }

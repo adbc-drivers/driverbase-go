@@ -58,13 +58,13 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 }
 
 // newStatement constructs a new statementImpl wrapped by driverbase
-func newStatement(c *connectionImpl) adbc.Statement {
+func newStatement(c *ConnectionImpl) adbc.Statement {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: base,
-		conn:              c.conn,
+		conn:              c.Conn,
 		batchSize:         1000, // Default batch size for streaming operations
-		typeConverter:     c.typeConverter,
+		typeConverter:     c.TypeConverter,
 	})
 }
 
@@ -77,6 +77,13 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 		}
 		s.stmt = nil
 	}
+
+	// Clear any bound parameters when setting a new query
+	if s.boundStream != nil {
+		s.boundStream.Release()
+		s.boundStream = nil
+	}
+
 	s.query = query
 	return nil
 }
