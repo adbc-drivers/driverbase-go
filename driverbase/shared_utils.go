@@ -1,3 +1,8 @@
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -31,10 +36,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Constants for names of constraint types
 const (
-	Unique     = "UNIQUE"
-	PrimaryKey = "PRIMARY KEY"
+	Check      = "CHECK"
 	ForeignKey = "FOREIGN KEY"
+	PrimaryKey = "PRIMARY KEY"
+	Unique     = "UNIQUE"
 )
 
 var (
