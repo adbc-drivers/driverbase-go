@@ -32,7 +32,7 @@ type ConnectionImpl struct {
 	// TypeConverter handles SQL-to-Arrow type conversion
 	TypeConverter TypeConverter
 	// db is the underlying database for metadata operations
-	db *sql.DB
+	Db *sql.DB
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
@@ -51,7 +51,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 		ConnectionImplBase: base,
 		Conn:               sqlConn,
 		TypeConverter:      db.typeConverter,
-		db:                 db.db,
+		Db:                 db.db,
 	}
 
 	var impl driverbase.ConnectionImpl
@@ -91,12 +91,6 @@ func (c *ConnectionImpl) NewStatement() (adbc.Statement, error) {
 // SetTypeConverter allows higher-level drivers to customize type conversion
 func (c *ConnectionImpl) SetTypeConverter(converter TypeConverter) {
 	c.TypeConverter = converter
-}
-
-// GetDB exposes the underlying *sql.DB for drivers that need direct database access
-// for metadata operations or custom functionality
-func (c *ConnectionImpl) GetDB() *sql.DB {
-	return c.db
 }
 
 // SetOption sets a string option on this connection
