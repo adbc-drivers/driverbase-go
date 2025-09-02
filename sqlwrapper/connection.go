@@ -23,6 +23,11 @@ import (
 	"github.com/apache/arrow-adbc/go/adbc"
 )
 
+// BulkIngestImplFactory creates database-specific bulk ingest implementations
+type BulkIngestImplFactory interface {
+	CreateBulkIngestImpl(conn *sql.Conn, typeConverter TypeConverter, errorHelper *driverbase.ErrorHelper, options *driverbase.BulkIngestOptions) driverbase.BulkIngestImpl
+}
+
 // ConnectionImpl implements the ADBC Connection interface on top of database/sql.
 type ConnectionImpl struct {
 	driverbase.ConnectionImplBase
@@ -33,6 +38,8 @@ type ConnectionImpl struct {
 	TypeConverter TypeConverter
 	// db is the underlying database for metadata operations
 	Db *sql.DB
+	// bulkIngestImplFactory creates database-specific bulk ingest implementations
+	bulkIngestImplFactory BulkIngestImplFactory
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
@@ -91,6 +98,11 @@ func (c *ConnectionImpl) NewStatement() (adbc.Statement, error) {
 // SetTypeConverter allows higher-level drivers to customize type conversion
 func (c *ConnectionImpl) SetTypeConverter(converter TypeConverter) {
 	c.TypeConverter = converter
+}
+
+// SetBulkIngestImplFactory allows higher-level drivers to provide bulk ingest functionality
+func (c *ConnectionImpl) SetBulkIngestImplFactory(factory BulkIngestImplFactory) {
+	c.bulkIngestImplFactory = factory
 }
 
 // SetOption sets a string option on this connection

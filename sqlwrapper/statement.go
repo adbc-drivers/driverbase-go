@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
@@ -50,6 +51,11 @@ type statementImpl struct {
 	batchSize int
 	// typeConverter handles SQL-to-Arrow type conversion
 	typeConverter TypeConverter
+
+	// bulk ingest
+	bulkIngestOptions     driverbase.BulkIngestOptions
+	bulkIngestImplFactory BulkIngestImplFactory
+	bulkIngestManager     *driverbase.BulkIngestManager
 }
 
 // Base returns the embedded StatementImplBase for driverbase plumbing
@@ -61,10 +67,12 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 func newStatement(c *ConnectionImpl) adbc.Statement {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	return driverbase.NewStatement(&statementImpl{
-		StatementImplBase: base,
-		conn:              c.Conn,
-		batchSize:         1000, // Default batch size for streaming operations
-		typeConverter:     c.TypeConverter,
+		StatementImplBase:     base,
+		conn:                  c.Conn,
+		batchSize:             1000, // Default batch size for streaming operations
+		typeConverter:         c.TypeConverter,
+		bulkIngestOptions:     driverbase.NewBulkIngestOptions(),
+		bulkIngestImplFactory: c.bulkIngestImplFactory,
 	})
 }
 
@@ -90,6 +98,13 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 
 // SetOption sets a string option on this statement
 func (s *statementImpl) SetOption(key, val string) error {
+	// Let driverbase handle standard bulk ingest options first
+	if handled, err := s.bulkIngestOptions.SetOption(&s.Base().ErrorHelper, key, val); err != nil {
+		return err
+	} else if handled {
+		return nil
+	}
+
 	switch key {
 	case OptionKeyBatchSize:
 		size, err := strconv.Atoi(val)
@@ -140,6 +155,11 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
+	// Check if this is a bulk ingest operation
+	if s.boundStream != nil && s.bulkIngestOptions.IsSet() {
+		return s.executeBulkIngest(ctx)
+	}
+
 	// If we have a bound stream, execute it with bulk updates
 	if s.boundStream != nil {
 		return s.executeBulkUpdate(ctx)
@@ -209,53 +229,61 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		return nil, -1, err
 	}
 
-	// Execute the query
+	// Create sqlRecordReaderImpl - it handles both parameterized and non-parameterized queries
 	var rows *sql.Rows
-	var err error
+	var columnTypes []*sql.ColumnType
+	var schema *arrow.Schema
 
-	if s.stmt != nil {
-		rows, err = s.stmt.QueryContext(ctx)
-	} else {
-		rows, err = s.conn.QueryContext(ctx, s.query)
+	// For non-parameterized queries, execute immediately to get schema
+	if s.boundStream == nil {
+		var err error
+		if s.stmt != nil {
+			rows, err = s.stmt.QueryContext(ctx)
+		} else {
+			rows, err = s.conn.QueryContext(ctx, s.query)
+		}
+		if err != nil {
+			return nil, -1, s.Base().ErrorHelper.IO("failed to execute query: %v", err)
+		}
+
+		// Get column type information for schema
+		columnTypes, err = rows.ColumnTypes()
+		if err != nil {
+			err = errors.Join(err, rows.Close())
+			return nil, -1, s.Base().ErrorHelper.IO("failed to get column types: %v", err)
+		}
+
+		// Build Arrow schema
+		schema, err = buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
+		if err != nil {
+			err = errors.Join(err, rows.Close())
+			return nil, -1, s.Base().ErrorHelper.IO("failed to build Arrow schema: %v", err)
+		}
 	}
 
-	if err != nil {
-		return nil, -1, s.Base().ErrorHelper.IO("failed to execute query: %v", err)
-	}
-
-	// Get column type information for schema
-	columnTypes, err := rows.ColumnTypes()
-	if err != nil {
-		err = errors.Join(err, rows.Close())
-		return nil, -1, s.Base().ErrorHelper.IO("failed to get column types: %v", err)
-	}
-
-	// Build Arrow schema
-	schema, err := buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
-	if err != nil {
-		err = errors.Join(err, rows.Close())
-		return nil, -1, s.Base().ErrorHelper.IO("failed to build Arrow schema: %v", err)
-	}
-
-	// Create a record reader by constructing the implementation directly
+	// Create record reader implementation
 	impl := &sqlRecordReaderImpl{
-		rows:          rows,
-		columnTypes:   columnTypes,
-		schema:        schema,
+		rows:          rows,        // nil for parameterized queries, set for non-parameterized
+		columnTypes:   columnTypes, // nil for parameterized queries, set for non-parameterized
+		schema:        schema,      // nil for parameterized queries, set for non-parameterized
 		conn:          s.conn,
 		query:         s.query,
 		stmt:          s.stmt,
 		typeConverter: s.typeConverter,
 	}
-	impl.ensureValueBuffers(len(columnTypes))
+	if columnTypes != nil {
+		impl.ensureValueBuffers(len(columnTypes))
+	}
 
+	// Create BaseRecordReader with bound stream (nil for non-parameterized queries)
 	reader := &driverbase.BaseRecordReader{}
-	if err := reader.Init(ctx, memory.DefaultAllocator, nil, int64(s.batchSize), impl); err != nil {
-		err = errors.Join(err, rows.Close())
+	if err := reader.Init(ctx, memory.DefaultAllocator, s.boundStream, int64(s.batchSize), impl); err != nil {
+		if rows != nil {
+			err = errors.Join(err, rows.Close())
+		}
 		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)
 	}
 
-	// Note: We return -1 for row count since we don't know without reading all rows
 	return reader, -1, nil
 }
 
@@ -376,4 +404,37 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 	}
 
 	return totalAffected, nil
+}
+
+// executeBulkIngest executes bulk ingest using the driver-provided BulkIngestImpl
+func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
+	if s.bulkIngestImplFactory == nil {
+		return -1, s.Base().ErrorHelper.NotImplemented("bulk ingest not supported by this driver")
+	}
+
+	if s.bulkIngestManager == nil {
+		// Create the implementation with current options
+		impl := s.bulkIngestImplFactory.CreateBulkIngestImpl(
+			s.conn,
+			s.typeConverter,
+			&s.Base().ErrorHelper,
+			&s.bulkIngestOptions,
+		)
+
+		s.bulkIngestManager = &driverbase.BulkIngestManager{
+			Impl:        impl, // Use factory-created implementation with options
+			ErrorHelper: &s.Base().ErrorHelper,
+			Logger:      slog.Default(),
+			Alloc:       memory.DefaultAllocator,
+			Ctx:         ctx,
+			Options:     s.bulkIngestOptions, // Standard options handled by driverbase
+			Data:        s.boundStream,
+		}
+	}
+
+	if err := s.bulkIngestManager.Init(); err != nil {
+		return -1, err
+	}
+
+	return s.bulkIngestManager.ExecuteIngest()
 }
