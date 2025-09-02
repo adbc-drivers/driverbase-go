@@ -21,12 +21,12 @@ import (
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
-	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
 // ConnectionImpl implements the ADBC Connection interface on top of database/sql.
 type ConnectionImpl struct {
 	driverbase.ConnectionImplBase
+	Derived driverbase.Connection
 
 	// Conn is the dedicated SQL connection for this ADBC session
 	Conn *sql.Conn
@@ -68,6 +68,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 		// Default sqlwrapper connection implementation
 		impl = sqlwrapperConn
 	}
+	sqlwrapperConn.Derived = impl
 
 	// Build and return the ADBC Connection wrapper
 	builder := driverbase.NewConnectionBuilder(impl)
@@ -103,14 +104,6 @@ func (c *ConnectionImpl) NewStatement() (adbc.Statement, error) {
 // SetTypeConverter allows higher-level drivers to customize type conversion
 func (c *ConnectionImpl) SetTypeConverter(converter TypeConverter) {
 	c.TypeConverter = converter
-}
-
-// ExecuteBulkIngest performs bulk ingest operation.
-// Default implementation returns not supported - drivers should override this method.
-// TODO: Consider enhancing interface to return row count (int64, error) instead of just error
-// to support proper ExecuteUpdate row count reporting from bulk ingest operations.
-func (c *ConnectionImpl) ExecuteBulkIngest(ctx context.Context, options *driverbase.BulkIngestOptions, stream array.RecordReader) error {
-	return c.Base().ErrorHelper.NotImplemented("bulk ingest not supported by this driver")
 }
 
 // SetOption sets a string option on this connection
