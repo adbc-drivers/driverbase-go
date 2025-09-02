@@ -72,13 +72,24 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 	// Build and return the ADBC Connection wrapper
 	builder := driverbase.NewConnectionBuilder(impl)
 
-	// If impl supports DbObjectsEnumerator, register it
-	if enumerator, ok := any(impl).(driverbase.DbObjectsEnumerator); ok {
-		builder = builder.WithDbObjectsEnumerator(enumerator)
+	// If the implementation supports any of these extras, register them
+	if trait, ok := any(impl).(driverbase.AutocommitSetter); ok {
+		builder.WithAutocommitSetter(trait)
 	}
-
-	if namespacer, ok := any(impl).(driverbase.CurrentNamespacer); ok {
-		builder = builder.WithCurrentNamespacer(namespacer)
+	if trait, ok := any(impl).(driverbase.CurrentNamespacer); ok {
+		builder.WithCurrentNamespacer(trait)
+	}
+	if trait, ok := any(impl).(driverbase.DbObjectsEnumerator); ok {
+		builder.WithDbObjectsEnumerator(trait)
+	}
+	if trait, ok := any(impl).(driverbase.DbObjectsEnumeratorFactory); ok {
+		builder.WithDbObjectsEnumeratorFactory(trait)
+	}
+	if trait, ok := any(impl).(driverbase.DriverInfoPreparer); ok {
+		builder.WithDriverInfoPreparer(trait)
+	}
+	if trait, ok := any(impl).(driverbase.TableTypeLister); ok {
+		builder.WithTableTypeLister(trait)
 	}
 
 	return builder.Connection(), nil
