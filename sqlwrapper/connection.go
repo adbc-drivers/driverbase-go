@@ -21,12 +21,8 @@ import (
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
+	"github.com/apache/arrow-go/v18/arrow/array"
 )
-
-// BulkIngestImplFactory creates database-specific bulk ingest implementations
-type BulkIngestImplFactory interface {
-	CreateBulkIngestImpl(conn *sql.Conn, typeConverter TypeConverter, errorHelper *driverbase.ErrorHelper, options *driverbase.BulkIngestOptions) driverbase.BulkIngestImpl
-}
 
 // ConnectionImpl implements the ADBC Connection interface on top of database/sql.
 type ConnectionImpl struct {
@@ -38,8 +34,6 @@ type ConnectionImpl struct {
 	TypeConverter TypeConverter
 	// db is the underlying database for metadata operations
 	Db *sql.DB
-	// bulkIngestImplFactory creates database-specific bulk ingest implementations
-	bulkIngestImplFactory BulkIngestImplFactory
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
@@ -100,9 +94,12 @@ func (c *ConnectionImpl) SetTypeConverter(converter TypeConverter) {
 	c.TypeConverter = converter
 }
 
-// SetBulkIngestImplFactory allows higher-level drivers to provide bulk ingest functionality
-func (c *ConnectionImpl) SetBulkIngestImplFactory(factory BulkIngestImplFactory) {
-	c.bulkIngestImplFactory = factory
+// ExecuteBulkIngest performs bulk ingest operation.
+// Default implementation returns not supported - drivers should override this method.
+// TODO: Consider enhancing interface to return row count (int64, error) instead of just error
+// to support proper ExecuteUpdate row count reporting from bulk ingest operations.
+func (c *ConnectionImpl) ExecuteBulkIngest(ctx context.Context, options *driverbase.BulkIngestOptions, stream array.RecordReader) error {
+	return c.Base().ErrorHelper.NotImplemented("bulk ingest not supported by this driver")
 }
 
 // SetOption sets a string option on this connection
