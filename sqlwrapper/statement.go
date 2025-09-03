@@ -28,6 +28,11 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
+// BulkIngester interface allows drivers to implement database-specific bulk ingest functionality
+type BulkIngester interface {
+	ExecuteBulkIngest(ctx context.Context, conn *sql.Conn, options *driverbase.BulkIngestOptions, stream array.RecordReader) (int64, error)
+}
+
 // Custom option keys for the sqlwrapper
 const (
 	// OptionKeyBatchSize controls how many Arrow records to accumulate in a record batch
@@ -40,6 +45,8 @@ type statementImpl struct {
 
 	// conn is the dedicated SQL connection
 	conn *sql.Conn
+	// connectionImpl is a reference to the parent connection for bulk ingest
+	connectionImpl any
 	// query holds the SQL to execute
 	query string
 	// stmt holds the prepared statement, if Prepare() was called
@@ -50,6 +57,9 @@ type statementImpl struct {
 	batchSize int
 	// typeConverter handles SQL-to-Arrow type conversion
 	typeConverter TypeConverter
+
+	// bulk ingest
+	bulkIngestOptions driverbase.BulkIngestOptions
 }
 
 // Base returns the embedded StatementImplBase for driverbase plumbing
@@ -57,14 +67,16 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 	return &s.StatementImplBase
 }
 
-// newStatement constructs a new statementImpl wrapped by driverbase
+// newStatement constructs a new StatementImpl wrapped by driverbase
 func newStatement(c *ConnectionImpl) adbc.Statement {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: base,
 		conn:              c.Conn,
+		connectionImpl:    c.Derived,
 		batchSize:         1000, // Default batch size for streaming operations
 		typeConverter:     c.TypeConverter,
+		bulkIngestOptions: driverbase.NewBulkIngestOptions(),
 	})
 }
 
@@ -90,6 +102,13 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 
 // SetOption sets a string option on this statement
 func (s *statementImpl) SetOption(key, val string) error {
+	// Let driverbase handle standard bulk ingest options first
+	if handled, err := s.bulkIngestOptions.SetOption(&s.Base().ErrorHelper, key, val); err != nil {
+		return err
+	} else if handled {
+		return nil
+	}
+
 	switch key {
 	case OptionKeyBatchSize:
 		size, err := strconv.Atoi(val)
@@ -140,6 +159,11 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
+	// Check if this is a bulk ingest operation
+	if s.bulkIngestOptions.IsSet() {
+		return s.executeBulkIngest(ctx)
+	}
+
 	// If we have a bound stream, execute it with bulk updates
 	if s.boundStream != nil {
 		return s.executeBulkUpdate(ctx)
@@ -385,4 +409,23 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 	}
 
 	return totalAffected, nil
+}
+
+// executeBulkIngest executes bulk ingest using the connection's ExecuteBulkIngest method
+func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
+	// Check for proper bulk ingest setup
+	if s.boundStream == nil {
+		return -1, s.Base().ErrorHelper.InvalidArgument("bulk ingest options are set but no stream is bound - call BindStream() first")
+	}
+
+	// Type-assert to the BulkIngester interface for database-specific implementations
+	if ingester, ok := s.connectionImpl.(BulkIngester); ok {
+		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.conn, &s.bulkIngestOptions, s.boundStream)
+		if err != nil {
+			return -1, err
+		}
+		return rowCount, nil
+	}
+
+	return -1, s.Base().ErrorHelper.NotImplemented("connection does not support bulk ingest")
 }
