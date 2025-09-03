@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -142,16 +141,6 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 			// Already executed, return cached schema
 			return s.schema, nil
 		}
-
-		// Execute query without parameters
-		if s.stmt != nil {
-			rows, err = s.stmt.QueryContext(ctx)
-		} else {
-			rows, err = s.conn.QueryContext(ctx, s.query)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute query: %v", err)
-		}
 	} else {
 		// Case 2: Parameterized queries
 		if s.conn == nil || s.query == "" || s.typeConverter == nil {
@@ -165,9 +154,12 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 			}
 			s.rows = nil
 		}
+	}
 
-		// Extract parameters from the Arrow record
-		args := make([]any, int(rec.NumCols()))
+	// Extract parameters if present
+	var args []any
+	if rec != nil {
+		args = make([]any, int(rec.NumCols()))
 		for i := range args {
 			field := rec.Schema().Field(i)
 			args[i], err = s.typeConverter.ConvertArrowToGo(rec.Column(i), rowIdx, &field)
@@ -175,14 +167,18 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 				return nil, fmt.Errorf("failed to extract parameter %d: %w", i, err)
 			}
 		}
+	}
 
-		// Execute query with parameters
-		if s.stmt != nil {
-			rows, err = s.stmt.QueryContext(ctx, args...)
+	// Execute query (with or without parameters)
+	if s.stmt != nil {
+		rows, err = s.stmt.QueryContext(ctx, args...)
+	} else {
+		rows, err = s.conn.QueryContext(ctx, s.query, args...)
+	}
+	if err != nil {
+		if rec == nil {
+			return nil, fmt.Errorf("failed to execute query: %v", err)
 		} else {
-			rows, err = s.conn.QueryContext(ctx, s.query, args...)
-		}
-		if err != nil {
 			return nil, fmt.Errorf("failed to execute query with parameters: %w", err)
 		}
 	}
@@ -200,15 +196,7 @@ func (s *sqlRecordReaderImpl) setupResultSet(rows *sql.Rows) (schema *arrow.Sche
 		return nil, fmt.Errorf("failed to get column types: %w", err)
 	}
 
-	// if schema is unchanged for parameterized queries, reuse it
-	if s.schema != nil && reflect.DeepEqual(s.columnTypes, columnTypes) {
-		// Schema is unchanged, just update rows and buffers
-		s.rows = rows
-		s.ensureValueBuffers(len(columnTypes))
-		return s.schema, nil
-	}
-
-	// Build new Arrow schema (first time or schema changed)
+	// Build Arrow schema
 	s.schema, err = buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
 	if err != nil {
 		err = errors.Join(err, rows.Close())
