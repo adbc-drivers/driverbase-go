@@ -30,7 +30,7 @@ import (
 
 // BulkIngester interface allows drivers to implement database-specific bulk ingest functionality
 type BulkIngester interface {
-	ExecuteBulkIngest(ctx context.Context, options *driverbase.BulkIngestOptions, stream array.RecordReader) (int64, error)
+	ExecuteBulkIngest(ctx context.Context, conn *sql.Conn, options *driverbase.BulkIngestOptions, stream array.RecordReader) (int64, error)
 }
 
 // Custom option keys for the sqlwrapper
@@ -411,7 +411,7 @@ func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
 
 	// Type-assert to the BulkIngester interface for database-specific implementations
 	if ingester, ok := s.connectionImpl.(BulkIngester); ok {
-		rowCount, err := ingester.ExecuteBulkIngest(ctx, &s.bulkIngestOptions, s.boundStream)
+		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.conn, &s.bulkIngestOptions, s.boundStream)
 		if err != nil {
 			return -1, err
 		}
