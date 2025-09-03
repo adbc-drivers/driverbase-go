@@ -26,6 +26,7 @@ import (
 // ConnectionImpl implements the ADBC Connection interface on top of database/sql.
 type ConnectionImpl struct {
 	driverbase.ConnectionImplBase
+	Derived driverbase.Connection
 
 	// Conn is the dedicated SQL connection for this ADBC session
 	Conn *sql.Conn
@@ -67,6 +68,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 		// Default sqlwrapper connection implementation
 		impl = sqlwrapperConn
 	}
+	sqlwrapperConn.Derived = impl
 
 	// Build and return the ADBC Connection wrapper
 	builder := driverbase.NewConnectionBuilder(impl)
