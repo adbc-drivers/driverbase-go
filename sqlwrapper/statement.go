@@ -227,60 +227,27 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (schema *arrow.Schema
 }
 
 // ExecuteQuery runs a SELECT and returns a RecordReader for streaming Arrow records
-func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
+func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordReader, rowCount int64, err error) {
 	if s.query == "" {
-		err := s.Base().ErrorHelper.InvalidArgument("no query set")
-		return nil, -1, err
+		return nil, -1, s.Base().ErrorHelper.InvalidArgument("no query set")
 	}
 
-	// Execute the query
-	var rows *sql.Rows
-	var err error
-
-	if s.stmt != nil {
-		rows, err = s.stmt.QueryContext(ctx)
-	} else {
-		rows, err = s.conn.QueryContext(ctx, s.query)
-	}
-
-	if err != nil {
-		return nil, -1, s.Base().ErrorHelper.IO("failed to execute query: %v", err)
-	}
-
-	// Get column type information for schema
-	columnTypes, err := rows.ColumnTypes()
-	if err != nil {
-		err = errors.Join(err, rows.Close())
-		return nil, -1, s.Base().ErrorHelper.IO("failed to get column types: %v", err)
-	}
-
-	// Build Arrow schema
-	schema, err := buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
-	if err != nil {
-		err = errors.Join(err, rows.Close())
-		return nil, -1, s.Base().ErrorHelper.IO("failed to build Arrow schema: %v", err)
-	}
-
-	// Create a record reader by constructing the implementation directly
+	// Create the record reader implementation with all the state
 	impl := &sqlRecordReaderImpl{
-		rows:          rows,
-		columnTypes:   columnTypes,
-		schema:        schema,
 		conn:          s.conn,
 		query:         s.query,
 		stmt:          s.stmt,
 		typeConverter: s.typeConverter,
 	}
-	impl.ensureValueBuffers(len(columnTypes))
 
-	reader := &driverbase.BaseRecordReader{}
-	if err := reader.Init(ctx, memory.DefaultAllocator, nil, int64(s.batchSize), impl); err != nil {
-		err = errors.Join(err, rows.Close())
+	// Let BaseRecordReader handle parameterized vs non-parameterized logic
+	baseRecordReader := &driverbase.BaseRecordReader{}
+	if err := baseRecordReader.Init(ctx, memory.DefaultAllocator, s.boundStream,
+		int64(s.batchSize), impl); err != nil {
 		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)
 	}
 
-	// Note: We return -1 for row count since we don't know without reading all rows
-	return reader, -1, nil
+	return baseRecordReader, -1, nil
 }
 
 // Close shuts down the prepared stmt (if any) and releases bound resources
