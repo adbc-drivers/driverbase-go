@@ -17,7 +17,6 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -135,25 +134,12 @@ type sqlRecordReaderImpl struct {
 func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (schema *arrow.Schema, err error) {
 	var rows *sql.Rows
 
-	if rec == nil {
-		// Case 1: Non-parameterized queries
-		if s.rows != nil {
-			// Already executed, return cached schema
-			return s.schema, nil
+	// Close any previous result set
+	if s.rows != nil {
+		if err := s.rows.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close previous result set: %w", err)
 		}
-	} else {
-		// Case 2: Parameterized queries
-		if s.conn == nil || s.query == "" || s.typeConverter == nil {
-			return nil, fmt.Errorf("bind parameter support requires connection, query, and type converter")
-		}
-
-		// Close any previous result set
-		if s.rows != nil {
-			if err := s.rows.Close(); err != nil {
-				return nil, fmt.Errorf("failed to close previous result set: %w", err)
-			}
-			s.rows = nil
-		}
+		s.rows = nil
 	}
 
 	// Extract parameters if present
@@ -176,35 +162,31 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 		rows, err = s.conn.QueryContext(ctx, s.query, args...)
 	}
 	if err != nil {
-		if rec == nil {
-			return nil, fmt.Errorf("failed to execute query: %v", err)
-		} else {
-			return nil, fmt.Errorf("failed to execute query with parameters: %w", err)
-		}
+		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
 
+	// Assign rows immediately - Close() will handle cleanup on errors
+	s.rows = rows
+
 	// Common post-execution logic for both cases
-	return s.setupResultSet(rows)
+	return s.setupResultSet()
 }
 
 // setupResultSet handles the common post-execution setup for both parameterized and non-parameterized queries
-func (s *sqlRecordReaderImpl) setupResultSet(rows *sql.Rows) (schema *arrow.Schema, err error) {
-	// Get column type information
-	columnTypes, err := rows.ColumnTypes()
+func (s *sqlRecordReaderImpl) setupResultSet() (schema *arrow.Schema, err error) {
+	// Get column type information from s.rows (assigned in NextResultSet)
+	columnTypes, err := s.rows.ColumnTypes()
 	if err != nil {
-		err = errors.Join(err, rows.Close())
 		return nil, fmt.Errorf("failed to get column types: %w", err)
 	}
 
 	// Build Arrow schema
 	s.schema, err = buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
 	if err != nil {
-		err = errors.Join(err, rows.Close())
 		return nil, fmt.Errorf("failed to build Arrow schema: %w", err)
 	}
 
 	// Update implementation state
-	s.rows = rows
 	s.columnTypes = columnTypes
 	s.ensureValueBuffers(len(columnTypes))
 
