@@ -132,7 +132,6 @@ type sqlRecordReaderImpl struct {
 // For SQL queries with bind parameters, this method executes the query with the
 // specific parameter set (rec[rowIdx]) and returns the resulting schema.
 func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (schema *arrow.Schema, err error) {
-	var rows *sql.Rows
 
 	// Close any previous result set
 	if s.rows != nil {
@@ -157,16 +156,13 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 
 	// Execute query (with or without parameters)
 	if s.stmt != nil {
-		rows, err = s.stmt.QueryContext(ctx, args...)
+		s.rows, err = s.stmt.QueryContext(ctx, args...)
 	} else {
-		rows, err = s.conn.QueryContext(ctx, s.query, args...)
+		s.rows, err = s.conn.QueryContext(ctx, s.query, args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
-
-	// Assign rows immediately - Close() will handle cleanup on errors
-	s.rows = rows
 
 	// Common post-execution logic for both cases
 	return s.setupResultSet()
