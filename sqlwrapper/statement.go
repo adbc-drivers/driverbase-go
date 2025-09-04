@@ -46,7 +46,7 @@ type statementImpl struct {
 	// conn is the dedicated SQL connection
 	conn *sql.Conn
 	// connectionImpl is a reference to the parent connection for bulk ingest
-	connectionImpl any
+	connectionImpl ConnectionImpl
 	// query holds the SQL to execute
 	query string
 	// stmt holds the prepared statement, if Prepare() was called
@@ -68,7 +68,7 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 }
 
 // newStatement constructs a new StatementImpl wrapped by driverbase
-func newStatement(c *ConnectionImpl) adbc.Statement {
+func newStatement(c *ConnectionImplBase) adbc.Statement {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: base,
