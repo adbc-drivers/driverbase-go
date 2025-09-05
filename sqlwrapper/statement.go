@@ -279,6 +279,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 		int64(s.batchSize), impl); err != nil {
 		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)
 	}
+	s.boundStream = nil
 
 	if err := s.connectionImpl.OfferPending(closer{baseRecordReader: baseRecordReader}); err != nil {
 		return nil, -1, err
