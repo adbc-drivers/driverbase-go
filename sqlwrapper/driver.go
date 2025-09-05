@@ -30,8 +30,8 @@ type ConnectionFactory interface {
 	// that embeds or wraps it to add database-specific functionality.
 	CreateConnection(
 		ctx context.Context,
-		conn *ConnectionImpl,
-	) (driverbase.ConnectionImpl, error)
+		conn *ConnectionImplBase,
+	) (ConnectionImpl, error)
 }
 
 // Driver provides an ADBC driver implementation that wraps database/sql drivers.
