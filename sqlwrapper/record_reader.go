@@ -115,16 +115,16 @@ func appendValue(builder array.Builder, val any, typeConverter TypeConverter, fi
 // This is the row-wise implementation that BaseRecordReader converts to batch-wise.
 type sqlRecordReaderImpl struct {
 	// Current result set data
-	rows        *sql.Rows
+	rows        *LoggingRows
 	columnTypes []*sql.ColumnType
 	values      []any
 	valuePtrs   []any
 	schema      *arrow.Schema
 
 	// For bind parameter support
-	conn          *sql.Conn     // Database connection to execute queries
+	conn          *LoggingConn  // Database connection to execute queries
 	query         string        // Original SQL query with placeholders
-	stmt          *sql.Stmt     // Prepared statement (optional)
+	stmt          *LoggingStmt  // Prepared statement (optional)
 	typeConverter TypeConverter // Type converter for building schemas
 }
 
