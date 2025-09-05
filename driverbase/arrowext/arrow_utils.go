@@ -23,11 +23,12 @@ import (
 // [array.NewRecordReader] which may return an error.
 type EmptyReader struct{}
 
-func (EmptyReader) Retain()               {}
-func (EmptyReader) Release()              {}
-func (EmptyReader) Schema() *arrow.Schema { return arrow.NewSchema([]arrow.Field{}, nil) }
-func (EmptyReader) Next() bool            { return false }
-func (EmptyReader) Record() arrow.Record  { return nil }
-func (EmptyReader) Err() error            { return nil }
+func (EmptyReader) Retain()                        {}
+func (EmptyReader) Release()                       {}
+func (EmptyReader) Schema() *arrow.Schema          { return arrow.NewSchema([]arrow.Field{}, nil) }
+func (EmptyReader) Next() bool                     { return false }
+func (EmptyReader) Record() arrow.RecordBatch      { return nil }
+func (EmptyReader) RecordBatch() arrow.RecordBatch { return nil }
+func (EmptyReader) Err() error                     { return nil }
 
 var _ array.RecordReader = &EmptyReader{}

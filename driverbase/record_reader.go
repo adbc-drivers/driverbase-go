@@ -40,7 +40,7 @@ type RecordReaderImpl interface {
 	// NextResultSet closes the current result set and opens the next
 	// result set for the given parameters. If there are no parameters, it
 	// will be called exactly once with rec == nil.
-	NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error)
+	NextResultSet(ctx context.Context, rec arrow.RecordBatch, rowIdx int) (*arrow.Schema, error)
 }
 
 // BaseRecordReader is an array.RecordReader based on a row-wise interface.
@@ -58,12 +58,12 @@ type BaseRecordReader struct {
 	schema    *arrow.Schema
 	builder   *array.RecordBuilder
 
-	// The next record to be yielded
-	record arrow.Record
+	// The next nextBatch to be yielded
+	nextBatch arrow.RecordBatch
 	// All errors encountered
 	err error
 	// Current record containing bind parameters (if any)
-	paramRecord arrow.Record
+	paramBatch arrow.RecordBatch
 	// Current row index into paramRecord
 	paramIndex int
 	done       bool
@@ -107,7 +107,7 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 			return nil
 		}
 	}
-	rr.schema, err = rr.impl.NextResultSet(rr.ctx, rr.paramRecord, rr.paramIndex)
+	rr.schema, err = rr.impl.NextResultSet(rr.ctx, rr.paramBatch, rr.paramIndex)
 	if err != nil {
 		rr.err = err
 		rr.Close()
@@ -119,9 +119,9 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 }
 
 func (rr *BaseRecordReader) Close() {
-	if rr.record != nil {
-		rr.record.Release()
-		rr.record = nil
+	if rr.nextBatch != nil {
+		rr.nextBatch.Release()
+		rr.nextBatch = nil
 	}
 	if rr.builder != nil {
 		rr.builder.Release()
@@ -146,9 +146,9 @@ func (rr *BaseRecordReader) Next() bool {
 	if rr.impl == nil || rr.err != nil {
 		return false
 	}
-	if rr.record != nil {
-		rr.record.Release()
-		rr.record = nil
+	if rr.nextBatch != nil {
+		rr.nextBatch.Release()
+		rr.nextBatch = nil
 	}
 	if rr.done {
 		rr.Close()
@@ -174,7 +174,7 @@ func (rr *BaseRecordReader) Next() bool {
 				break
 			}
 
-			_, err = rr.impl.NextResultSet(rr.ctx, rr.paramRecord, rr.paramIndex)
+			_, err = rr.impl.NextResultSet(rr.ctx, rr.paramBatch, rr.paramIndex)
 			if err != nil {
 				rr.err = err
 				// TODO: close here?
@@ -190,7 +190,7 @@ func (rr *BaseRecordReader) Next() bool {
 		}
 		rows++
 	}
-	rr.record = rr.builder.NewRecord()
+	rr.nextBatch = rr.builder.NewRecordBatch()
 	if rows == 0 && rr.done {
 		// N.B. I believe rows == 0 implies rr.done here
 		// Clean up eagerly since we will return false below
@@ -209,16 +209,16 @@ func (rr *BaseRecordReader) advanceParams() bool {
 
 	rr.paramIndex++
 	// Must loop in case params yields a 0-row record
-	for rr.paramRecord == nil || rr.paramIndex >= int(rr.paramRecord.NumRows()) {
+	for rr.paramBatch == nil || rr.paramIndex >= int(rr.paramBatch.NumRows()) {
 		if rr.params.Next() {
-			rr.paramRecord = rr.params.Record()
+			rr.paramBatch = rr.params.RecordBatch()
 			rr.paramIndex = 0
 		} else {
 			return false
 		}
 	}
 	// Don't check rr.params.Err() here, that's checked in Close()
-	return rr.paramRecord != nil && rr.paramIndex < int(rr.paramRecord.NumRows())
+	return rr.paramBatch != nil && rr.paramIndex < int(rr.paramBatch.NumRows())
 }
 
 func (rr *BaseRecordReader) Release() {
@@ -237,10 +237,16 @@ func (rr *BaseRecordReader) Schema() *arrow.Schema {
 	return rr.schema
 }
 
-func (rr *BaseRecordReader) Record() arrow.Record {
-	return rr.record
+func (rr *BaseRecordReader) Record() arrow.RecordBatch {
+	return rr.nextBatch
+}
+
+func (rr *BaseRecordReader) RecordBatch() arrow.RecordBatch {
+	return rr.nextBatch
 }
 
 func (rr *BaseRecordReader) Err() error {
 	return rr.err
 }
+
+var _ array.RecordReader = &BaseRecordReader{}
