@@ -41,7 +41,7 @@ type ConnectionImplBase struct {
 	Derived ConnectionImpl
 
 	// Conn is the dedicated SQL connection for this ADBC session
-	Conn *sql.Conn
+	Conn *LoggingConn
 	// TypeConverter handles SQL-to-Arrow type conversion
 	TypeConverter TypeConverter
 	// db is the underlying database for metadata operations
@@ -64,7 +64,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 	// Create the base sqlwrapper connection first
 	sqlwrapperConn := &ConnectionImplBase{
 		ConnectionImplBase: base,
-		Conn:               sqlConn,
+		Conn:               &LoggingConn{Conn: sqlConn, Logger: base.Logger},
 		TypeConverter:      db.typeConverter,
 		Db:                 db.db,
 	}

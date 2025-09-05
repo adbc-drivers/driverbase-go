@@ -30,7 +30,7 @@ import (
 
 // BulkIngester interface allows drivers to implement database-specific bulk ingest functionality
 type BulkIngester interface {
-	ExecuteBulkIngest(ctx context.Context, conn *sql.Conn, options *driverbase.BulkIngestOptions, stream array.RecordReader) (int64, error)
+	ExecuteBulkIngest(ctx context.Context, conn *LoggingConn, options *driverbase.BulkIngestOptions, stream array.RecordReader) (int64, error)
 }
 
 // Custom option keys for the sqlwrapper
@@ -44,13 +44,13 @@ type statementImpl struct {
 	driverbase.StatementImplBase
 
 	// conn is the dedicated SQL connection
-	conn *sql.Conn
+	conn *LoggingConn
 	// connectionImpl is a reference to the parent connection for bulk ingest
 	connectionImpl ConnectionImpl
 	// query holds the SQL to execute
 	query string
 	// stmt holds the prepared statement, if Prepare() was called
-	stmt *sql.Stmt
+	stmt *LoggingStmt
 	// boundStream holds the bound Arrow record stream for bulk operations
 	boundStream array.RecordReader
 	// batchSize controls how many records to process at once during streaming execution
@@ -217,7 +217,7 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (schema *arrow.Schema
 	// Execute query with LIMIT 0 to get schema without data
 	limitQuery := fmt.Sprintf("SELECT * FROM (%s) AS subquery LIMIT 0", s.query)
 
-	var rows *sql.Rows
+	var rows *LoggingRows
 
 	// Can't use prepared statement with modified query, fall back to direct execution
 	rows, err = s.conn.QueryContext(ctx, limitQuery)
@@ -362,7 +362,7 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 	}
 
 	// Prepare statement if needed
-	var stmt *sql.Stmt
+	var stmt *LoggingStmt
 	if s.stmt != nil {
 		stmt = s.stmt
 	} else {
