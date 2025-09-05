@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -25,6 +26,13 @@ import (
 
 type ConnectionImpl interface {
 	driverbase.ConnectionImpl
+
+	// Track a pending operation that blocks other pending operations
+	// (generally, a query with a result set, which needs to be cancelled
+	// before running other queries on this connection).
+	OfferPending(io.Closer) error
+	// Cancel any other running queries.
+	ClearPending() error
 }
 
 // ConnectionImplBase implements the ADBC Connection interface on top of database/sql.
@@ -38,6 +46,8 @@ type ConnectionImplBase struct {
 	TypeConverter TypeConverter
 	// db is the underlying database for metadata operations
 	Db *sql.DB
+
+	Pending io.Closer
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
@@ -141,7 +151,31 @@ func (c *ConnectionImplBase) Rollback(ctx context.Context) error {
 
 // Close closes the underlying SQL connection
 func (c *ConnectionImplBase) Close() error {
+	if err := c.ClearPending(); err != nil {
+		return errors.Join(err, c.Conn.Close())
+	}
 	return c.Conn.Close()
+}
+
+func (c *ConnectionImplBase) OfferPending(pending io.Closer) error {
+	if err := c.ClearPending(); err != nil {
+		return err
+	}
+	c.Pending = pending
+	return nil
+}
+
+func (c *ConnectionImplBase) ClearPending() error {
+	if c.Pending == nil {
+		return nil
+	}
+	defer func() {
+		c.Pending = nil
+	}()
+	if err := c.Pending.Close(); err != nil {
+		return c.Base().ErrorHelper.Errorf(adbc.StatusInternal, "failed to clear pending operation: %v", err)
+	}
+	return nil
 }
 
 var _ ConnectionImpl = (*ConnectionImplBase)(nil)
