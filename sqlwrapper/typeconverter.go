@@ -37,11 +37,23 @@ const (
 	MetaKeyLength                     = "sql.length"
 )
 
+type ColumnType struct {
+	Name             string
+	DatabaseTypeName string
+	Nullable         bool
+	Length           *int64
+	Precision        *int64
+	Scale            *int64
+}
+
 // TypeConverter allows higher-level drivers to customize SQL-to-Arrow type and value conversion
 type TypeConverter interface {
-	// ConvertColumnType converts a SQL column type to an Arrow type and nullable flag
-	// It also returns metadata that should be included in the Arrow field
+	// ConvertColumnType unpacks a sql.ColumnType to our ColumnType struct and calls ConvertRawColumnType for the actual conversion.
 	ConvertColumnType(colType *sql.ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
+
+	// ConvertColumnType converts a raw ColumnType (with metadata from strings or internal struct) to an Arrow type and nullable flag
+	// It also returns metadata that should be included in the Arrow field.
+	ConvertRawColumnType(colType ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
 
 	// ConvertSQLToArrow converts a SQL value to the appropriate Go value for Arrow builders
 	// The sqlValue comes from database/sql scanning, field contains the target Arrow type and metadata
@@ -287,20 +299,47 @@ func convertToDecimalString(val any) (string, error) {
 	}
 }
 
-// ConvertColumnType implements TypeConverter interface with the default conversion logic
 func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.DataType, bool, arrow.Metadata, error) {
-	typeName := strings.ToUpper(colType.DatabaseTypeName())
+	// Unpack sql.ColumnType to our ColumnType struct
 	nullable, _ := colType.Nullable()
+
+	var length, precision, scale *int64
+	if l, ok := colType.Length(); ok {
+		length = &l
+	}
+	if p, s, ok := colType.DecimalSize(); ok {
+		precision = &p
+		scale = &s
+	}
+
+	ourColType := ColumnType{
+		Name:             colType.Name(),
+		DatabaseTypeName: colType.DatabaseTypeName(),
+		Nullable:         nullable,
+		Length:           length,
+		Precision:        precision,
+		Scale:            scale,
+	}
+
+	return d.ConvertRawColumnType(ourColType)
+}
+
+// ConvertRawColumnType implements TypeConverter interface with the default conversion logic
+func (d DefaultTypeConverter) ConvertRawColumnType(colType ColumnType) (arrow.DataType, bool, arrow.Metadata, error) {
+	typeName := strings.ToUpper(colType.DatabaseTypeName)
+	nullable := colType.Nullable
 
 	switch typeName {
 	case "DECIMAL", "NUMERIC":
-		if precision, scale, ok := colType.DecimalSize(); ok {
+		if colType.Precision != nil && colType.Scale != nil {
+			precision := *colType.Precision
+			scale := *colType.Scale
 			if scale == 0 && precision <= 19 { // max digits for int64
 				// Treat as integer type if precision fits in int64
 				arrowType := arrow.PrimitiveTypes.Int64
 				metadata := arrow.MetadataFrom(map[string]string{
-					MetaKeyDatabaseTypeName: colType.DatabaseTypeName(),
-					MetaKeyColumnName:       colType.Name(),
+					MetaKeyDatabaseTypeName: colType.DatabaseTypeName,
+					MetaKeyColumnName:       colType.Name,
 					MetaKeyPrecision:        fmt.Sprintf("%d", precision),
 					MetaKeyScale:            fmt.Sprintf("%d", scale),
 				})
@@ -315,8 +354,8 @@ func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.
 
 			// Build metadata with decimal information
 			metadata := arrow.MetadataFrom(map[string]string{
-				MetaKeyDatabaseTypeName: colType.DatabaseTypeName(),
-				MetaKeyColumnName:       colType.Name(),
+				MetaKeyDatabaseTypeName: colType.DatabaseTypeName,
+				MetaKeyColumnName:       colType.Name,
 				MetaKeyPrecision:        fmt.Sprintf("%d", precision),
 				MetaKeyScale:            fmt.Sprintf("%d", scale),
 			})
@@ -326,15 +365,16 @@ func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.
 		// Fall back to string if precision/scale not available
 
 	case "DATETIME", "TIMESTAMP":
-		// Try to get precision from DecimalSize (which represents fractional seconds precision)
+		// Try to get precision from Precision field (which represents fractional seconds precision)
 		var timestampType arrow.DataType
 		metadataMap := map[string]string{
-			MetaKeyDatabaseTypeName: colType.DatabaseTypeName(),
-			MetaKeyColumnName:       colType.Name(),
+			MetaKeyDatabaseTypeName: colType.DatabaseTypeName,
+			MetaKeyColumnName:       colType.Name,
 		}
 
-		if precision, _, ok := colType.DecimalSize(); ok {
+		if colType.Precision != nil {
 			// precision represents fractional seconds digits (0-9)
+			precision := *colType.Precision
 			metadataMap[MetaKeyFractionalSecondsPrecision] = fmt.Sprintf("%d", precision)
 			timeUnit := convertPrecisionToTimeUnit(precision)
 			timestampType = &arrow.TimestampType{Unit: timeUnit}
@@ -347,15 +387,16 @@ func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.
 		return timestampType, nullable, metadata, nil
 
 	case "TIME":
-		// Try to get precision from DecimalSize (which represents fractional seconds precision)
+		// Try to get precision from Precision field (which represents fractional seconds precision)
 		var timeType arrow.DataType
 		metadataMap := map[string]string{
-			MetaKeyDatabaseTypeName: colType.DatabaseTypeName(),
-			MetaKeyColumnName:       colType.Name(),
+			MetaKeyDatabaseTypeName: colType.DatabaseTypeName,
+			MetaKeyColumnName:       colType.Name,
 		}
 
-		if precision, _, ok := colType.DecimalSize(); ok {
+		if colType.Precision != nil {
 			// precision represents fractional seconds digits (0-9)
+			precision := *colType.Precision
 			metadataMap[MetaKeyFractionalSecondsPrecision] = fmt.Sprintf("%d", precision)
 			timeUnit := convertPrecisionToTimeUnit(precision)
 
@@ -380,18 +421,18 @@ func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.
 
 	// Build metadata with original SQL type information
 	metadataMap := map[string]string{
-		MetaKeyDatabaseTypeName: colType.DatabaseTypeName(),
-		MetaKeyColumnName:       colType.Name(),
+		MetaKeyDatabaseTypeName: colType.DatabaseTypeName,
+		MetaKeyColumnName:       colType.Name,
 	}
 
 	// Add additional metadata if available
-	if length, ok := colType.Length(); ok {
-		metadataMap[MetaKeyLength] = fmt.Sprintf("%d", length)
+	if colType.Length != nil {
+		metadataMap[MetaKeyLength] = fmt.Sprintf("%d", *colType.Length)
 	}
 
-	if precision, scale, ok := colType.DecimalSize(); ok {
-		metadataMap[MetaKeyPrecision] = fmt.Sprintf("%d", precision)
-		metadataMap[MetaKeyScale] = fmt.Sprintf("%d", scale)
+	if colType.Precision != nil && colType.Scale != nil {
+		metadataMap[MetaKeyPrecision] = fmt.Sprintf("%d", *colType.Precision)
+		metadataMap[MetaKeyScale] = fmt.Sprintf("%d", *colType.Scale)
 	}
 
 	// Create metadata with all collected information
