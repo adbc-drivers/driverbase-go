@@ -82,6 +82,10 @@ func newStatement(c *ConnectionImplBase) adbc.Statement {
 
 // SetSqlQuery stores the SQL text on the statement
 func (s *statementImpl) SetSqlQuery(query string) error {
+	if err := s.connectionImpl.ClearPending(); err != nil {
+		return err
+	}
+
 	// if someone resets the SQL after Prepare, clean up the old stmt
 	if s.stmt != nil {
 		if err := s.stmt.Close(); err != nil {
@@ -159,6 +163,10 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
+	if err := s.connectionImpl.ClearPending(); err != nil {
+		return -1, err
+	}
+
 	// Check if this is a bulk ingest operation
 	if s.bulkIngestOptions.IsSet() {
 		return s.executeBulkIngest(ctx)
@@ -202,6 +210,10 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (schema *arrow.Schema
 		return nil, s.Base().ErrorHelper.InvalidArgument("no query set")
 	}
 
+	if err := s.connectionImpl.ClearPending(); err != nil {
+		return nil, err
+	}
+
 	// Execute query with LIMIT 0 to get schema without data
 	limitQuery := fmt.Sprintf("SELECT * FROM (%s) AS subquery LIMIT 0", s.query)
 
@@ -226,10 +238,25 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (schema *arrow.Schema
 	return buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
 }
 
+type closer struct {
+	baseRecordReader *driverbase.BaseRecordReader
+}
+
+func (c closer) Close() error {
+	if c.baseRecordReader != nil {
+		c.baseRecordReader.Close()
+	}
+	return nil
+}
+
 // ExecuteQuery runs a SELECT and returns a RecordReader for streaming Arrow records
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordReader, rowCount int64, err error) {
 	if s.query == "" {
 		return nil, -1, s.Base().ErrorHelper.InvalidArgument("no query set")
+	}
+
+	if err := s.connectionImpl.ClearPending(); err != nil {
+		return nil, -1, err
 	}
 
 	// Create the record reader implementation with all the state
@@ -242,9 +269,19 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 
 	// Let BaseRecordReader handle parameterized vs non-parameterized logic
 	baseRecordReader := &driverbase.BaseRecordReader{}
-	if err := baseRecordReader.Init(ctx, memory.DefaultAllocator, s.boundStream,
+	// Must use a background context or else when the CGO wrapper code
+	// cancels the context, that gets propagated down to the underlying
+	// database/sql driver which in some implementations will close the
+	// connection for some reason.
+	// TODO(lidavidm): when given ctx is cancelled, cancel the query, but
+	// not in a way that breaks the connection!
+	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.boundStream,
 		int64(s.batchSize), impl); err != nil {
 		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)
+	}
+
+	if err := s.connectionImpl.OfferPending(closer{baseRecordReader: baseRecordReader}); err != nil {
+		return nil, -1, err
 	}
 
 	return baseRecordReader, -1, nil
@@ -283,6 +320,10 @@ func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
 func (s *statementImpl) Prepare(ctx context.Context) (err error) {
 	if s.query == "" {
 		return s.Base().ErrorHelper.InvalidArgument("no query to prepare")
+	}
+
+	if err := s.connectionImpl.ClearPending(); err != nil {
+		return err
 	}
 
 	// Close old statement if it exists
