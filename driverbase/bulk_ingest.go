@@ -184,7 +184,7 @@ type BulkIngestManager struct {
 	Data        array.RecordReader
 
 	// Internal state
-	records chan arrow.Record
+	batches chan arrow.RecordBatch
 }
 
 func (bi *BulkIngestManager) Close() {
@@ -192,11 +192,11 @@ func (bi *BulkIngestManager) Close() {
 		bi.Data.Release()
 		bi.Data = nil
 	}
-	if bi.records != nil {
-		for record := range bi.records {
+	if bi.batches != nil {
+		for record := range bi.batches {
 			record.Release()
 		}
-		bi.records = nil
+		bi.batches = nil
 	}
 }
 
@@ -247,9 +247,9 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 	// Drain the bind parameters into a channel, chunking data appropriately.  (The
 	// final data size after being serialized to Parquet will vary based on
 	// compression/encoding ratios.)
-	bi.records = make(chan arrow.Record, bi.Options.ReadDepth)
+	bi.batches = make(chan arrow.RecordBatch, bi.Options.ReadDepth)
 	g.Go(func() error {
-		defer close(bi.records)
+		defer close(bi.batches)
 		for bi.Data.Next() {
 			select {
 			case <-cancelCtx.Done():
@@ -260,9 +260,9 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 			}
 
 			// TODO(lidavidm): rechunk data
-			rec := bi.Data.Record()
+			rec := bi.Data.RecordBatch()
 			rec.Retain()
-			bi.records <- rec
+			bi.batches <- rec
 		}
 
 		err := bi.Data.Err()
@@ -289,7 +289,7 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 						return err
 					}
 
-					rows, bytes, err := writeParquetForIngestion(&bi.Options.WriterProps, schema, bi.records, sink.Sink())
+					rows, bytes, err := writeParquetForIngestion(&bi.Options.WriterProps, schema, bi.batches, sink.Sink())
 					// TODO(lidavidm): in these cases, don't we still need to delete the file?
 					if err != nil {
 						return errors.Join(err, sink.Close())
@@ -409,15 +409,15 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 
 // writeParquetForIngestion pulls records from the channel and appends them to a Parquet
 // file until a certain number of rows is reached or the channel is closed.
-func writeParquetForIngestion(writerProps *WriterProps, schema *arrow.Schema, records chan arrow.Record, sink io.Writer) (int64, int64, error) {
+func writeParquetForIngestion(writerProps *WriterProps, schema *arrow.Schema, batches chan arrow.RecordBatch, sink io.Writer) (int64, int64, error) {
 	w, err := pqarrow.NewFileWriter(schema, sink, writerProps.ParquetWriterProps, writerProps.ArrowWriterProps)
 	if err != nil {
 		return 0, 0, err
 	}
 
 	rows := int64(0)
-	for record := range records {
-		err = func(record arrow.Record) error {
+	for record := range batches {
+		err = func(record arrow.RecordBatch) error {
 			defer record.Release()
 			if record.NumRows() == 0 {
 				return nil

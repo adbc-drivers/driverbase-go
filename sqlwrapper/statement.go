@@ -122,7 +122,7 @@ func (s *statementImpl) SetOption(key, val string) error {
 }
 
 // Bind uses an arrow record batch to bind parameters to the query
-func (s *statementImpl) Bind(ctx context.Context, record arrow.Record) error {
+func (s *statementImpl) Bind(ctx context.Context, record arrow.RecordBatch) error {
 	if record == nil {
 		return s.Base().ErrorHelper.InvalidArgument("record cannot be nil")
 	}
@@ -134,7 +134,7 @@ func (s *statementImpl) Bind(ctx context.Context, record arrow.Record) error {
 	}
 
 	// Convert single record to a RecordReader using Arrow's built-in function
-	s.boundStream, _ = array.NewRecordReader(record.Schema(), []arrow.Record{record})
+	s.boundStream, _ = array.NewRecordReader(record.Schema(), []arrow.RecordBatch{record})
 	return nil
 }
 
@@ -336,7 +336,7 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 
 	params := make([]any, s.boundStream.Schema().NumFields())
 	for s.boundStream.Next() {
-		record := s.boundStream.Record()
+		record := s.boundStream.RecordBatch()
 		for rowIdx := range int(record.NumRows()) {
 			for colIdx := range int(record.NumCols()) {
 				arr := record.Column(colIdx)

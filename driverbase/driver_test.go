@@ -538,7 +538,7 @@ func (base *statement) Base() *driverbase.StatementImplBase {
 	return &base.StatementImplBase
 }
 
-func (base *statement) Bind(ctx context.Context, values arrow.Record) error {
+func (base *statement) Bind(ctx context.Context, values arrow.RecordBatch) error {
 	return base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "Bind")
 }
 
@@ -777,9 +777,9 @@ func messagesEqual(expected, actual logMessage) bool {
 func tableFromRecordReader(rdr array.RecordReader) arrow.Table {
 	defer rdr.Release()
 
-	recs := make([]arrow.Record, 0)
+	recs := make([]arrow.RecordBatch, 0)
 	for rdr.Next() {
-		rec := rdr.Record()
+		rec := rdr.RecordBatch()
 		rec.Retain()
 		defer rec.Release()
 		recs = append(recs, rec)

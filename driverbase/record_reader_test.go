@@ -72,7 +72,7 @@ func (s *implNoInitialResultSet) BeginAppending(builder *array.RecordBuilder) er
 func (s *implNoInitialResultSet) Close() error {
 	return nil
 }
-func (s *implNoInitialResultSet) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error) {
+func (s *implNoInitialResultSet) NextResultSet(ctx context.Context, rec arrow.RecordBatch, rowIdx int) (*arrow.Schema, error) {
 	return nil, fmt.Errorf("no result set")
 }
 
@@ -90,7 +90,7 @@ func (s *BaseRecordReaderSuite) TestInitNoParams() {
 	rr := &BaseRecordReader{}
 	defer rr.Release()
 	schema := arrow.NewSchema([]arrow.Field{}, nil)
-	params, err := array.NewRecordReader(schema, []arrow.Record{})
+	params, err := array.NewRecordReader(schema, []arrow.RecordBatch{})
 	s.NoError(err)
 	s.NoError(rr.Init(s.ctx, s.mem, params, 0, impl))
 	s.False(rr.Next())
@@ -117,7 +117,7 @@ func (s *implBeginAppending) BeginAppending(builder *array.RecordBuilder) error 
 func (s *implBeginAppending) Close() error {
 	return nil
 }
-func (s *implBeginAppending) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error) {
+func (s *implBeginAppending) NextResultSet(ctx context.Context, rec arrow.RecordBatch, rowIdx int) (*arrow.Schema, error) {
 	if s.beganAppending == 0 {
 		return s.schema, nil
 	}
@@ -169,7 +169,7 @@ func (s *implNextCallsClose) BeginAppending(builder *array.RecordBuilder) error 
 func (s *implNextCallsClose) Close() error {
 	return nil
 }
-func (s *implNextCallsClose) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error) {
+func (s *implNextCallsClose) NextResultSet(ctx context.Context, rec arrow.RecordBatch, rowIdx int) (*arrow.Schema, error) {
 	if s.appended == 0 {
 		return arrow.NewSchema([]arrow.Field{
 			{Name: "ints", Type: arrow.PrimitiveTypes.Int32, Nullable: true},
@@ -240,7 +240,7 @@ func (s *implNextResultSetAcrossParams) BeginAppending(builder *array.RecordBuil
 func (s *implNextResultSetAcrossParams) Close() error {
 	return nil
 }
-func (s *implNextResultSetAcrossParams) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (*arrow.Schema, error) {
+func (s *implNextResultSetAcrossParams) NextResultSet(ctx context.Context, rec arrow.RecordBatch, rowIdx int) (*arrow.Schema, error) {
 	s.resultSet++
 	s.appended = 0
 	return arrow.NewSchema([]arrow.Field{
@@ -256,7 +256,7 @@ func (s *BaseRecordReaderSuite) TestNextResultSetAcrossParams() {
 	}, nil)
 	rec1 := testutil.RecordFromJSON(s.T(), s.mem, schema, `[{"ints": 1}, {"ints": 2}, {"ints": 3}, {"ints": 4}]`)
 	rec2 := testutil.RecordFromJSON(s.T(), s.mem, schema, `[{"ints": 1}, {"ints": 2}, {"ints": 3}, {"ints": 4}]`)
-	params, err := array.NewRecordReader(schema, []arrow.Record{rec1, rec2})
+	params, err := array.NewRecordReader(schema, []arrow.RecordBatch{rec1, rec2})
 	s.NoError(err)
 	defer rec1.Release()
 	defer rec2.Release()

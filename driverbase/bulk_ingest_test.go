@@ -97,7 +97,7 @@ func (s *WriteParquetTestSuite) TestByteLimit() {
 			Nullable: true,
 		},
 	}, nil)
-	records := make(chan arrow.Record, 5)
+	records := make(chan arrow.RecordBatch, 5)
 	record1 := testutil.RecordFromJSON(s.T(), s.mem, schema, `[{"strs": "foobar"}, {"strs": "spam and eggs"}, {"strs": "eggs and spam"}]`)
 	record1.Retain() // used below
 	defer record1.Release()
@@ -115,7 +115,7 @@ func (s *WriteParquetTestSuite) TestByteLimit() {
 	table := s.readTable(sink)
 	defer table.Release()
 
-	expected := array.NewTableFromRecords(schema, []arrow.Record{record1})
+	expected := array.NewTableFromRecords(schema, []arrow.RecordBatch{record1})
 	defer expected.Release()
 	s.Truef(array.TableEqual(expected, table), "Expected: %s\nActual: %s", expected, table)
 
@@ -136,7 +136,7 @@ func (s *WriteParquetTestSuite) TestByteLimitMultiBatch() {
 			Nullable: true,
 		},
 	}, nil)
-	records := make(chan arrow.Record, 5)
+	records := make(chan arrow.RecordBatch, 5)
 	record1 := testutil.RecordFromJSON(s.T(), s.mem, schema, `[{"strs": "foobar"}, {"strs": "spam and eggs"}]`)
 	record1.Retain() // used below
 	defer record1.Release()
@@ -161,7 +161,7 @@ func (s *WriteParquetTestSuite) TestByteLimitMultiBatch() {
 	table := s.readTable(sink)
 	defer table.Release()
 
-	expected := array.NewTableFromRecords(schema, []arrow.Record{record1, record2})
+	expected := array.NewTableFromRecords(schema, []arrow.RecordBatch{record1, record2})
 	defer expected.Release()
 	s.Truef(array.TableEqual(expected, table), "Expected: %s\nActual: %s", expected, table)
 

@@ -131,7 +131,7 @@ type sqlRecordReaderImpl struct {
 // NextResultSet returns the Arrow schema for the current result set.
 // For SQL queries with bind parameters, this method executes the query with the
 // specific parameter set (rec[rowIdx]) and returns the resulting schema.
-func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Record, rowIdx int) (schema *arrow.Schema, err error) {
+func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.RecordBatch, rowIdx int) (schema *arrow.Schema, err error) {
 
 	// Close any previous result set
 	if s.rows != nil {
