@@ -380,7 +380,8 @@ func (d DefaultTypeConverter) ConvertRawColumnType(colType ColumnType) (arrow.Da
 			timestampType = &arrow.TimestampType{Unit: timeUnit}
 		} else {
 			// No precision info available, default to microseconds (most common)
-			timestampType = arrow.FixedWidthTypes.Timestamp_us
+			// Use manual TimestampType creation to avoid automatic UTC timezone
+			timestampType = &arrow.TimestampType{Unit: arrow.Microsecond}
 		}
 
 		metadata := arrow.MetadataFrom(metadataMap)
