@@ -1,3 +1,8 @@
+// Copyright (c) 2025 ADBC Drivers Contributors
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -24,6 +29,7 @@ package validation
 import (
 	"context"
 	"io"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -347,7 +353,15 @@ func (c *ConnectionTests) TestMetadataGetInfo() {
 					c.FailNow("Unknown union type code", valUnion.ChildID(i))
 				}
 
-				c.Equal(expected, actual, adbc.InfoCode(code).String())
+				if p, ok := expected.(*regexp.Regexp); ok {
+					if a, ok := actual.(string); ok {
+						c.Truef(p.MatchString(a), "expected %q to match %v", a, p.String())
+					} else {
+						c.FailNow("expected string, got non-string %#v", actual)
+					}
+				} else {
+					c.Equal(expected, actual, adbc.InfoCode(code).String())
+				}
 			}
 		}
 	}
