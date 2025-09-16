@@ -19,7 +19,7 @@ repos:
   - id: codespell
 
 - repo: https://github.com/golangci/golangci-lint
-  rev: 00a561d9a79578a2800dece2f04c60ad479a3798  # v2.1.2
+  rev: 43d03392d7dc3746fa776dbddd66dfcccff70651  # v2.4.0
   hooks:
   - id: golangci-lint
     name: lint driverbase
@@ -43,6 +43,12 @@ repos:
     name: lint sqlwrapper
     entry: bash -c 'cd sqlwrapper && golangci-lint run --fix --timeout 5m'
     files: ^sqlwrapper/
+    types_or: [go, go-mod]
+
+  - id: golangci-lint
+    name: lint validation
+    entry: bash -c 'cd validation && golangci-lint run --fix --timeout 5m'
+    files: ^validation/
     types_or: [go, go-mod]
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
