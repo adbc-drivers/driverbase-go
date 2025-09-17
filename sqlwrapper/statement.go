@@ -60,6 +60,8 @@ type statementImpl struct {
 
 	// bulk ingest
 	bulkIngestOptions driverbase.BulkIngestOptions
+	// closed tracks if the statement has been closed
+	closed bool
 }
 
 // Base returns the embedded StatementImplBase for driverbase plumbing
@@ -207,7 +209,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 // ExecuteSchema returns the Arrow schema by querying zero rows
 func (s *statementImpl) ExecuteSchema(ctx context.Context) (schema *arrow.Schema, err error) {
 	if s.query == "" {
-		return nil, s.Base().ErrorHelper.InvalidArgument("no query set")
+		return nil, s.Base().ErrorHelper.InvalidState("no query set")
 	}
 
 	if err := s.connectionImpl.ClearPending(); err != nil {
@@ -252,7 +254,7 @@ func (c closer) Close() error {
 // ExecuteQuery runs a SELECT and returns a RecordReader for streaming Arrow records
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordReader, rowCount int64, err error) {
 	if s.query == "" {
-		return nil, -1, s.Base().ErrorHelper.InvalidArgument("no query set")
+		return nil, -1, s.Base().ErrorHelper.InvalidState("no query set")
 	}
 
 	if err := s.connectionImpl.ClearPending(); err != nil {
@@ -290,6 +292,12 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 
 // Close shuts down the prepared stmt (if any) and releases bound resources
 func (s *statementImpl) Close() error {
+	// Check if already closed
+	if s.closed {
+		return s.Base().ErrorHelper.InvalidState("statement already closed")
+	}
+	s.closed = true
+
 	// Release bound stream if any
 	if s.boundStream != nil {
 		s.boundStream.Release()
