@@ -48,9 +48,6 @@ type ColumnType struct {
 
 // TypeConverter allows higher-level drivers to customize SQL-to-Arrow type and value conversion
 type TypeConverter interface {
-	// ConvertColumnType unpacks a sql.ColumnType to our ColumnType struct and calls ConvertRawColumnType for the actual conversion.
-	ConvertColumnType(colType *sql.ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
-
 	// ConvertColumnType converts a raw ColumnType (with metadata from strings or internal struct) to an Arrow type and nullable flag
 	// It also returns metadata that should be included in the Arrow field.
 	ConvertRawColumnType(colType ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
@@ -299,7 +296,7 @@ func convertToDecimalString(val any) (string, error) {
 	}
 }
 
-func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.DataType, bool, arrow.Metadata, error) {
+func ConvertColumnType(colType *sql.ColumnType, typeConverter TypeConverter) (arrow.DataType, bool, arrow.Metadata, error) {
 	// Unpack sql.ColumnType to our ColumnType struct
 	nullable, _ := colType.Nullable()
 
@@ -321,7 +318,7 @@ func (d DefaultTypeConverter) ConvertColumnType(colType *sql.ColumnType) (arrow.
 		Scale:            scale,
 	}
 
-	return d.ConvertRawColumnType(ourColType)
+	return typeConverter.ConvertRawColumnType(ourColType)
 }
 
 // ConvertRawColumnType implements TypeConverter interface with the default conversion logic
@@ -667,7 +664,7 @@ func (d DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index int
 func buildArrowSchemaFromColumnTypes(columnTypes []*sql.ColumnType, typeConverter TypeConverter) (*arrow.Schema, error) {
 	fields := make([]arrow.Field, len(columnTypes))
 	for i, colType := range columnTypes {
-		arrowType, nullable, metadata, err := typeConverter.ConvertColumnType(colType)
+		arrowType, nullable, metadata, err := ConvertColumnType(colType, typeConverter)
 		if err != nil {
 			return nil, err
 		}
