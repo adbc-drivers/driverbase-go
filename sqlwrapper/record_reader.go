@@ -25,13 +25,12 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
-// appendValue is the unified value appender that handles all Arrow builder types.
-// It uses a TypeConverter to handle SQL-to-Arrow value conversion, then appends to the builder.
-func appendValue(builder array.Builder, val any, typeConverter TypeConverter, field *arrow.Field) error {
-	// Convert SQL value to Arrow value using TypeConverter
-	convertedVal, err := typeConverter.ConvertSQLToArrow(val, field)
+// appendValue is a helper function that uses an Inserter to convert and append a value to an Arrow builder
+func appendValue(builder array.Builder, sqlValue any, inserter Inserter, field *arrow.Field) error {
+	// Use the inserter to convert the SQL value
+	convertedVal, err := inserter.ConvertValue(sqlValue)
 	if err != nil {
-		return fmt.Errorf("failed to convert SQL value to Arrow: %w", err)
+		return fmt.Errorf("failed to convert SQL value: %w", err)
 	}
 
 	// Handle NULL values
@@ -41,9 +40,8 @@ func appendValue(builder array.Builder, val any, typeConverter TypeConverter, fi
 	}
 
 	// Now append the converted value using the appropriate builder method
-	// The TypeConverter has already done the conversion, we just need to call the right Append method
 	switch b := builder.(type) {
-	// Numeric types - TypeConverter has already converted to the correct type
+	// Numeric types
 	case *array.Int8Builder:
 		b.Append(convertedVal.(int8))
 	case *array.Int16Builder:
@@ -93,7 +91,7 @@ func appendValue(builder array.Builder, val any, typeConverter TypeConverter, fi
 	case *array.TimestampBuilder:
 		b.AppendTime(convertedVal.(time.Time))
 
-	// Decimal types - TypeConverter returns string for AppendValueFromString
+	// Decimal types - expect string for AppendValueFromString
 	case *array.Decimal32Builder:
 		return b.AppendValueFromString(convertedVal.(string))
 	case *array.Decimal64Builder:
@@ -126,6 +124,9 @@ type sqlRecordReaderImpl struct {
 	query         string        // Original SQL query with placeholders
 	stmt          *LoggingStmt  // Prepared statement (optional)
 	typeConverter TypeConverter // Type converter for building schemas
+
+	// Performance optimization: pre-computed inserters to avoid per-value type switching
+	columnInserters []Inserter
 }
 
 // NextResultSet returns the Arrow schema for the current result set.
@@ -206,13 +207,19 @@ func (s *sqlRecordReaderImpl) ensureValueBuffers(numCols int) {
 // This is called once before the first AppendRow call.
 // Note: BaseRecordReader may need to call this again after schema changes in NextResultSet.
 func (s *sqlRecordReaderImpl) BeginAppending(builder *array.RecordBuilder) error {
-	// No setup needed for now - we'll work directly with the RecordBuilder
+	// Create column-specific inserters to eliminate per-value type switching
+	// This optimization moves type checking from per-value to per-column (once per schema setup)
+	numCols := len(s.schema.Fields())
+	s.columnInserters = make([]Inserter, numCols)
 
-	// TODO (https://github.com/adbc-drivers/driverbase-go/issues/29): Replace appendValue calls in AppendRow with per-column closure functions.
-	//       For each column, generate a func(val any) error that captures the appropriate builder
-	//       and performs type-safe appending. Store these in s.appendFuncs and call them in AppendRow.
-	//       This eliminates repeated type switches and enables faster row appending.
-	//       See https://github.com/apache/arrow-go/blob/main/arrow/csv/reader.go#L237 for an example of this pattern.
+	for i, field := range s.schema.Fields() {
+		inserter, err := s.typeConverter.CreateInserter(&field)
+		if err != nil {
+			return fmt.Errorf("failed to create inserter for column %d: %w", i, err)
+		}
+		s.columnInserters[i] = inserter
+	}
+
 	return nil
 }
 
@@ -235,17 +242,12 @@ func (s *sqlRecordReaderImpl) AppendRow(builder *array.RecordBuilder) error {
 	}
 
 	// Append each column value to its corresponding Arrow builder
+	// Using pre-computed inserters eliminates per-value type switching
 	for i := range len(s.values) {
 		fieldBuilder := builder.Field(i)
 		field := s.schema.Field(i)
-		if s.values[i] == nil {
-			// Handle SQL NULL values
-			fieldBuilder.AppendNull()
-		} else {
-			// Use the unified appendValue function to handle type conversion
-			if err := appendValue(fieldBuilder, s.values[i], s.typeConverter, &field); err != nil {
-				return fmt.Errorf("failed to append value to column %d: %w", i, err)
-			}
+		if err := appendValue(fieldBuilder, s.values[i], s.columnInserters[i], &field); err != nil {
+			return fmt.Errorf("failed to append value to column %d: %w", i, err)
 		}
 	}
 

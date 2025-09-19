@@ -46,20 +46,300 @@ type ColumnType struct {
 	Scale            *int64
 }
 
+// Inserter handles SQL-to-Arrow value conversion and builder appending for a specific Arrow type
+type Inserter interface {
+	// ConvertValue converts a SQL value to the appropriate Go type for the Arrow builder
+	ConvertValue(sqlValue any) (any, error)
+}
+
 // TypeConverter allows higher-level drivers to customize SQL-to-Arrow type and value conversion
 type TypeConverter interface {
 	// ConvertColumnType converts a raw ColumnType (with metadata from strings or internal struct) to an Arrow type and nullable flag
 	// It also returns metadata that should be included in the Arrow field.
 	ConvertRawColumnType(colType ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
 
-	// ConvertSQLToArrow converts a SQL value to the appropriate Go value for Arrow builders
-	// The sqlValue comes from database/sql scanning, field contains the target Arrow type and metadata
-	ConvertSQLToArrow(sqlValue any, field *arrow.Field) (any, error)
+	// CreateInserter creates a type-specific inserter for optimized SQL-to-Arrow conversion
+	// This allows drivers to provide custom inserters for specific types (e.g., MySQL JSON, spatial types)
+	CreateInserter(field *arrow.Field) (Inserter, error)
 
 	// ConvertArrowToGo extracts a Go value from an Arrow array at the given index
 	// This is used for parameter binding and value extraction
 	// The field parameter provides access to the Arrow field metadata
 	ConvertArrowToGo(arrowArray arrow.Array, index int, field *arrow.Field) (any, error)
+}
+
+// Type-specific inserter implementations that eliminate per-value type switching
+
+// Numeric inserters
+type int8Inserter struct{}
+
+func (ins *int8Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[int8](unwrapped)
+}
+
+type int16Inserter struct{}
+
+func (ins *int16Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[int16](unwrapped)
+}
+
+type int32Inserter struct{}
+
+func (ins *int32Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[int32](unwrapped)
+}
+
+type int64Inserter struct{}
+
+func (ins *int64Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[int64](unwrapped)
+}
+
+type uint8Inserter struct{}
+
+func (ins *uint8Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[uint8](unwrapped)
+}
+
+type uint16Inserter struct{}
+
+func (ins *uint16Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[uint16](unwrapped)
+}
+
+type uint32Inserter struct{}
+
+func (ins *uint32Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[uint32](unwrapped)
+}
+
+type uint64Inserter struct{}
+
+func (ins *uint64Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[uint64](unwrapped)
+}
+
+type float32Inserter struct{}
+
+func (ins *float32Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[float32](unwrapped)
+}
+
+type float64Inserter struct{}
+
+func (ins *float64Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToNumericType[float64](unwrapped)
+}
+
+// Boolean inserter
+type boolInserter struct{}
+
+func (ins *boolInserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToBool(unwrapped)
+}
+
+// String inserter
+type stringInserter struct{}
+
+func (ins *stringInserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToString(unwrapped)
+}
+
+// Binary inserter
+type binaryInserter struct{}
+
+func (ins *binaryInserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToBinary(unwrapped)
+}
+
+// Date inserters
+type date32Inserter struct{}
+
+func (ins *date32Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToDate32(unwrapped)
+}
+
+type date64Inserter struct{}
+
+func (ins *date64Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToDate64(unwrapped)
+}
+
+// Time inserters
+type time32Inserter struct{}
+
+func (ins *time32Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToTime32(unwrapped)
+}
+
+type time64Inserter struct{}
+
+func (ins *time64Inserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToTime64(unwrapped)
+}
+
+// Timestamp inserter
+type timestampInserter struct{}
+
+func (ins *timestampInserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToTimestamp(unwrapped)
+}
+
+// Decimal inserters
+type decimalInserter struct{}
+
+func (ins *decimalInserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return convertToDecimalString(unwrapped)
+}
+
+// Default/fallback inserter for unknown types
+type defaultInserter struct{}
+
+func (ins *defaultInserter) ConvertValue(sqlValue any) (any, error) {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil || unwrapped == nil {
+		return nil, err
+	}
+	return fmt.Sprintf("%v", unwrapped), nil
+}
+
+// CreateInserter implements TypeConverter.CreateInserter for DefaultTypeConverter
+func (d DefaultTypeConverter) CreateInserter(field *arrow.Field) (Inserter, error) {
+	switch field.Type.(type) {
+	// Numeric types
+	case *arrow.Int8Type:
+		return &int8Inserter{}, nil
+	case *arrow.Int16Type:
+		return &int16Inserter{}, nil
+	case *arrow.Int32Type:
+		return &int32Inserter{}, nil
+	case *arrow.Int64Type:
+		return &int64Inserter{}, nil
+	case *arrow.Uint8Type:
+		return &uint8Inserter{}, nil
+	case *arrow.Uint16Type:
+		return &uint16Inserter{}, nil
+	case *arrow.Uint32Type:
+		return &uint32Inserter{}, nil
+	case *arrow.Uint64Type:
+		return &uint64Inserter{}, nil
+	case *arrow.Float32Type:
+		return &float32Inserter{}, nil
+	case *arrow.Float64Type:
+		return &float64Inserter{}, nil
+
+	// Boolean type
+	case *arrow.BooleanType:
+		return &boolInserter{}, nil
+
+	// String types
+	case *arrow.StringType, *arrow.LargeStringType, *arrow.StringViewType:
+		return &stringInserter{}, nil
+
+	// Binary types
+	case *arrow.BinaryType, *arrow.LargeBinaryType, *arrow.BinaryViewType, *arrow.FixedSizeBinaryType:
+		return &binaryInserter{}, nil
+
+	// Date types
+	case *arrow.Date32Type:
+		return &date32Inserter{}, nil
+	case *arrow.Date64Type:
+		return &date64Inserter{}, nil
+
+	// Time types
+	case *arrow.Time32Type:
+		return &time32Inserter{}, nil
+	case *arrow.Time64Type:
+		return &time64Inserter{}, nil
+
+	// Timestamp types
+	case *arrow.TimestampType:
+		return &timestampInserter{}, nil
+
+	// Decimal types
+	case *arrow.Decimal32Type, *arrow.Decimal64Type, *arrow.Decimal128Type, *arrow.Decimal256Type:
+		return &decimalInserter{}, nil
+
+	// Default fallback for unhandled types
+	default:
+		return &defaultInserter{}, nil
+	}
 }
 
 // DefaultTypeConverter provides the default SQL-to-Arrow type conversion
@@ -504,80 +784,6 @@ func unwrap(val any) (any, error) {
 		return v.Value()
 	}
 	return val, nil
-}
-
-// ConvertSQLToArrow implements the default SQL value to Arrow value conversion
-func (d DefaultTypeConverter) ConvertSQLToArrow(sqlValue any, field *arrow.Field) (any, error) {
-	arrowType := field.Type
-	// Handle SQL nullable types first
-	unwrapped, err := unwrap(sqlValue)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unwrap value: %w", err)
-	}
-	if unwrapped == nil {
-		return nil, nil // NULL value
-	}
-
-	// Convert based on the target Arrow type - doing all conversions here to simplify append logic
-	switch arrowType.(type) {
-	// Numeric types - handle conversion here instead of in appendValue
-	case *arrow.Int8Type:
-		return convertToNumericType[int8](unwrapped)
-	case *arrow.Int16Type:
-		return convertToNumericType[int16](unwrapped)
-	case *arrow.Int32Type:
-		return convertToNumericType[int32](unwrapped)
-	case *arrow.Int64Type:
-		return convertToNumericType[int64](unwrapped)
-	case *arrow.Uint8Type:
-		return convertToNumericType[uint8](unwrapped)
-	case *arrow.Uint16Type:
-		return convertToNumericType[uint16](unwrapped)
-	case *arrow.Uint32Type:
-		return convertToNumericType[uint32](unwrapped)
-	case *arrow.Uint64Type:
-		return convertToNumericType[uint64](unwrapped)
-	case *arrow.Float32Type:
-		return convertToNumericType[float32](unwrapped)
-	case *arrow.Float64Type:
-		return convertToNumericType[float64](unwrapped)
-
-	// Boolean type
-	case *arrow.BooleanType:
-		return convertToBool(unwrapped)
-
-	// String types
-	case *arrow.StringType, *arrow.LargeStringType, *arrow.StringViewType:
-		return convertToString(unwrapped)
-
-	// Binary types
-	case *arrow.BinaryType, *arrow.LargeBinaryType, *arrow.BinaryViewType, *arrow.FixedSizeBinaryType:
-		return convertToBinary(unwrapped)
-
-	// Date types
-	case *arrow.Date32Type:
-		return convertToDate32(unwrapped)
-	case *arrow.Date64Type:
-		return convertToDate64(unwrapped)
-
-	// Time types
-	case *arrow.Time32Type:
-		return convertToTime32(unwrapped)
-	case *arrow.Time64Type:
-		return convertToTime64(unwrapped)
-
-	// Timestamp types
-	case *arrow.TimestampType:
-		return convertToTimestamp(unwrapped)
-
-	// Decimal types - return as string for AppendValueFromString
-	case *arrow.Decimal32Type, *arrow.Decimal64Type, *arrow.Decimal128Type, *arrow.Decimal256Type:
-		return convertToDecimalString(unwrapped)
-
-	// Default: return value as-is
-	default:
-		return unwrapped, nil
-	}
 }
 
 // ConvertArrowToGo implements the default Arrow value to Go value conversion
