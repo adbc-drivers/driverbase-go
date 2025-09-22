@@ -159,8 +159,8 @@ func (s *sqlRecordReaderImpl) AppendRow(builder *array.RecordBuilder) error {
 
 	// Append each column value using pre-bound inserters
 	// This eliminates ALL type switching - inserters are bound to builders during BeginAppending
-	for i := range len(s.values) {
-		if err := s.columnInserters[i].AppendValue(s.values[i]); err != nil {
+	for i, val := range s.values {
+		if err := s.columnInserters[i].AppendValue(val); err != nil {
 			return fmt.Errorf("failed to append value to column %d: %w", i, err)
 		}
 	}

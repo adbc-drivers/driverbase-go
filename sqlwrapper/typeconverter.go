@@ -457,12 +457,17 @@ func (ins *timestampInserter) AppendValue(sqlValue any) error {
 	return nil
 }
 
-// Decimal inserters
-type decimalInserter struct {
-	builder array.Builder
+// DecimalBuilder interface defines the methods needed for decimal builders
+type DecimalBuilder interface {
+	AppendValueFromString(string) error
+	AppendNull()
 }
 
-func (ins *decimalInserter) AppendValue(sqlValue any) error {
+type decimalInserter[T DecimalBuilder] struct {
+	builder T
+}
+
+func (ins *decimalInserter[T]) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
 	if err != nil {
 		return err
@@ -475,19 +480,8 @@ func (ins *decimalInserter) AppendValue(sqlValue any) error {
 	if err != nil {
 		return err
 	}
-	// Use type assertion to call the correct AppendValueFromString
-	switch b := ins.builder.(type) {
-	case *array.Decimal32Builder:
-		return b.AppendValueFromString(val)
-	case *array.Decimal64Builder:
-		return b.AppendValueFromString(val)
-	case *array.Decimal128Builder:
-		return b.AppendValueFromString(val)
-	case *array.Decimal256Builder:
-		return b.AppendValueFromString(val)
-	default:
-		return fmt.Errorf("unsupported decimal builder type: %T", ins.builder)
-	}
+
+	return ins.builder.AppendValueFromString(val)
 }
 
 // Default/fallback inserter for unknown types
@@ -561,8 +555,14 @@ func (d DefaultTypeConverter) CreateInserter(field *arrow.Field, builder array.B
 		return &timestampInserter{builder: builder.(*array.TimestampBuilder)}, nil
 
 	// Decimal types
-	case *arrow.Decimal32Type, *arrow.Decimal64Type, *arrow.Decimal128Type, *arrow.Decimal256Type:
-		return &decimalInserter{builder: builder}, nil
+	case *arrow.Decimal32Type:
+		return &decimalInserter[*array.Decimal32Builder]{builder: builder.(*array.Decimal32Builder)}, nil
+	case *arrow.Decimal64Type:
+		return &decimalInserter[*array.Decimal64Builder]{builder: builder.(*array.Decimal64Builder)}, nil
+	case *arrow.Decimal128Type:
+		return &decimalInserter[*array.Decimal128Builder]{builder: builder.(*array.Decimal128Builder)}, nil
+	case *arrow.Decimal256Type:
+		return &decimalInserter[*array.Decimal256Builder]{builder: builder.(*array.Decimal256Builder)}, nil
 
 	// Default fallback for unhandled types
 	default:
