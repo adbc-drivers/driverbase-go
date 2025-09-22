@@ -47,9 +47,10 @@ type ColumnType struct {
 }
 
 // Inserter handles SQL-to-Arrow value conversion and builder appending for a specific Arrow type
+// The inserter is bound to a specific Arrow builder during creation to eliminate per-value type switching
 type Inserter interface {
-	// ConvertValue converts a SQL value to the appropriate Go type for the Arrow builder
-	ConvertValue(sqlValue any) (any, error)
+	// AppendValue converts a SQL value and appends it directly to the pre-bound Arrow builder
+	AppendValue(sqlValue any) error
 }
 
 // TypeConverter allows higher-level drivers to customize SQL-to-Arrow type and value conversion
@@ -58,9 +59,10 @@ type TypeConverter interface {
 	// It also returns metadata that should be included in the Arrow field.
 	ConvertRawColumnType(colType ColumnType) (arrowType arrow.DataType, nullable bool, metadata arrow.Metadata, err error)
 
-	// CreateInserter creates a type-specific inserter for optimized SQL-to-Arrow conversion
+	// CreateInserter creates a type-specific inserter bound to a specific Arrow builder
 	// This allows drivers to provide custom inserters for specific types (e.g., MySQL JSON, spatial types)
-	CreateInserter(field *arrow.Field) (Inserter, error)
+	// The inserter is pre-bound to the builder to eliminate per-value type switching
+	CreateInserter(field *arrow.Field, builder array.Builder) (Inserter, error)
 
 	// ConvertArrowToGo extracts a Go value from an Arrow array at the given index
 	// This is used for parameter binding and value extraction
@@ -71,274 +73,500 @@ type TypeConverter interface {
 // Type-specific inserter implementations that eliminate per-value type switching
 
 // Numeric inserters
-type int8Inserter struct{}
-
-func (ins *int8Inserter) ConvertValue(sqlValue any) (any, error) {
-	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
-	}
-	return convertToNumericType[int8](unwrapped)
+type int8Inserter struct {
+	builder *array.Int8Builder
 }
 
-type int16Inserter struct{}
-
-func (ins *int16Inserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *int8Inserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToNumericType[int16](unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[int8](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
-type int32Inserter struct{}
-
-func (ins *int32Inserter) ConvertValue(sqlValue any) (any, error) {
-	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
-	}
-	return convertToNumericType[int32](unwrapped)
+type int16Inserter struct {
+	builder *array.Int16Builder
 }
 
-type int64Inserter struct{}
-
-func (ins *int64Inserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *int16Inserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToNumericType[int64](unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[int16](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
-type uint8Inserter struct{}
-
-func (ins *uint8Inserter) ConvertValue(sqlValue any) (any, error) {
-	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
-	}
-	return convertToNumericType[uint8](unwrapped)
+type int32Inserter struct {
+	builder *array.Int32Builder
 }
 
-type uint16Inserter struct{}
-
-func (ins *uint16Inserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *int32Inserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToNumericType[uint16](unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[int32](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
-type uint32Inserter struct{}
-
-func (ins *uint32Inserter) ConvertValue(sqlValue any) (any, error) {
-	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
-	}
-	return convertToNumericType[uint32](unwrapped)
+type int64Inserter struct {
+	builder *array.Int64Builder
 }
 
-type uint64Inserter struct{}
-
-func (ins *uint64Inserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *int64Inserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToNumericType[uint64](unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[int64](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
-type float32Inserter struct{}
-
-func (ins *float32Inserter) ConvertValue(sqlValue any) (any, error) {
-	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
-	}
-	return convertToNumericType[float32](unwrapped)
+type uint8Inserter struct {
+	builder *array.Uint8Builder
 }
 
-type float64Inserter struct{}
-
-func (ins *float64Inserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *uint8Inserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToNumericType[float64](unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[uint8](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
+}
+
+type uint16Inserter struct {
+	builder *array.Uint16Builder
+}
+
+func (ins *uint16Inserter) AppendValue(sqlValue any) error {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil {
+		return err
+	}
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[uint16](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
+}
+
+type uint32Inserter struct {
+	builder *array.Uint32Builder
+}
+
+func (ins *uint32Inserter) AppendValue(sqlValue any) error {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil {
+		return err
+	}
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[uint32](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
+}
+
+type uint64Inserter struct {
+	builder *array.Uint64Builder
+}
+
+func (ins *uint64Inserter) AppendValue(sqlValue any) error {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil {
+		return err
+	}
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[uint64](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
+}
+
+type float32Inserter struct {
+	builder *array.Float32Builder
+}
+
+func (ins *float32Inserter) AppendValue(sqlValue any) error {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil {
+		return err
+	}
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[float32](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
+}
+
+type float64Inserter struct {
+	builder *array.Float64Builder
+}
+
+func (ins *float64Inserter) AppendValue(sqlValue any) error {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil {
+		return err
+	}
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToNumericType[float64](unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
 // Boolean inserter
-type boolInserter struct{}
+type boolInserter struct {
+	builder *array.BooleanBuilder
+}
 
-func (ins *boolInserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *boolInserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToBool(unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToBool(unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
 // String inserter
-type stringInserter struct{}
+type stringInserter struct {
+	builder array.StringLikeBuilder
+}
 
-func (ins *stringInserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *stringInserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToString(unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToString(unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
 // Binary inserter
-type binaryInserter struct{}
+type binaryInserter struct {
+	builder array.BinaryLikeBuilder
+}
 
-func (ins *binaryInserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *binaryInserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToBinary(unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToBinary(unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
 // Date inserters
-type date32Inserter struct{}
-
-func (ins *date32Inserter) ConvertValue(sqlValue any) (any, error) {
-	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
-	}
-	return convertToDate32(unwrapped)
+type date32Inserter struct {
+	builder *array.Date32Builder
 }
 
-type date64Inserter struct{}
-
-func (ins *date64Inserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *date32Inserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToDate64(unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToDate32(unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
+}
+
+type date64Inserter struct {
+	builder *array.Date64Builder
+}
+
+func (ins *date64Inserter) AppendValue(sqlValue any) error {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil {
+		return err
+	}
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToDate64(unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
 // Time inserters
-type time32Inserter struct{}
-
-func (ins *time32Inserter) ConvertValue(sqlValue any) (any, error) {
-	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
-	}
-	return convertToTime32(unwrapped)
+type time32Inserter struct {
+	builder *array.Time32Builder
 }
 
-type time64Inserter struct{}
-
-func (ins *time64Inserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *time32Inserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToTime64(unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToTime32(unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
+}
+
+type time64Inserter struct {
+	builder *array.Time64Builder
+}
+
+func (ins *time64Inserter) AppendValue(sqlValue any) error {
+	unwrapped, err := unwrap(sqlValue)
+	if err != nil {
+		return err
+	}
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToTime64(unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.Append(val)
+	return nil
 }
 
 // Timestamp inserter
-type timestampInserter struct{}
+type timestampInserter struct {
+	builder *array.TimestampBuilder
+}
 
-func (ins *timestampInserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *timestampInserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToTimestamp(unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToTimestamp(unwrapped)
+	if err != nil {
+		return err
+	}
+	ins.builder.AppendTime(val)
+	return nil
 }
 
 // Decimal inserters
-type decimalInserter struct{}
+type decimalInserter struct {
+	builder array.Builder
+}
 
-func (ins *decimalInserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *decimalInserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return convertToDecimalString(unwrapped)
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	val, err := convertToDecimalString(unwrapped)
+	if err != nil {
+		return err
+	}
+	// Use type assertion to call the correct AppendValueFromString
+	switch b := ins.builder.(type) {
+	case *array.Decimal32Builder:
+		return b.AppendValueFromString(val)
+	case *array.Decimal64Builder:
+		return b.AppendValueFromString(val)
+	case *array.Decimal128Builder:
+		return b.AppendValueFromString(val)
+	case *array.Decimal256Builder:
+		return b.AppendValueFromString(val)
+	default:
+		return fmt.Errorf("unsupported decimal builder type: %T", ins.builder)
+	}
 }
 
 // Default/fallback inserter for unknown types
-type defaultInserter struct{}
+type defaultInserter struct {
+	builder array.Builder
+}
 
-func (ins *defaultInserter) ConvertValue(sqlValue any) (any, error) {
+func (ins *defaultInserter) AppendValue(sqlValue any) error {
 	unwrapped, err := unwrap(sqlValue)
-	if err != nil || unwrapped == nil {
-		return nil, err
+	if err != nil {
+		return err
 	}
-	return fmt.Sprintf("%v", unwrapped), nil
+	if unwrapped == nil {
+		ins.builder.AppendNull()
+		return nil
+	}
+	return ins.builder.AppendValueFromString(fmt.Sprintf("%v", unwrapped))
 }
 
 // CreateInserter implements TypeConverter.CreateInserter for DefaultTypeConverter
-func (d DefaultTypeConverter) CreateInserter(field *arrow.Field) (Inserter, error) {
+func (d DefaultTypeConverter) CreateInserter(field *arrow.Field, builder array.Builder) (Inserter, error) {
 	switch field.Type.(type) {
 	// Numeric types
 	case *arrow.Int8Type:
-		return &int8Inserter{}, nil
+		return &int8Inserter{builder: builder.(*array.Int8Builder)}, nil
 	case *arrow.Int16Type:
-		return &int16Inserter{}, nil
+		return &int16Inserter{builder: builder.(*array.Int16Builder)}, nil
 	case *arrow.Int32Type:
-		return &int32Inserter{}, nil
+		return &int32Inserter{builder: builder.(*array.Int32Builder)}, nil
 	case *arrow.Int64Type:
-		return &int64Inserter{}, nil
+		return &int64Inserter{builder: builder.(*array.Int64Builder)}, nil
 	case *arrow.Uint8Type:
-		return &uint8Inserter{}, nil
+		return &uint8Inserter{builder: builder.(*array.Uint8Builder)}, nil
 	case *arrow.Uint16Type:
-		return &uint16Inserter{}, nil
+		return &uint16Inserter{builder: builder.(*array.Uint16Builder)}, nil
 	case *arrow.Uint32Type:
-		return &uint32Inserter{}, nil
+		return &uint32Inserter{builder: builder.(*array.Uint32Builder)}, nil
 	case *arrow.Uint64Type:
-		return &uint64Inserter{}, nil
+		return &uint64Inserter{builder: builder.(*array.Uint64Builder)}, nil
 	case *arrow.Float32Type:
-		return &float32Inserter{}, nil
+		return &float32Inserter{builder: builder.(*array.Float32Builder)}, nil
 	case *arrow.Float64Type:
-		return &float64Inserter{}, nil
+		return &float64Inserter{builder: builder.(*array.Float64Builder)}, nil
 
 	// Boolean type
 	case *arrow.BooleanType:
-		return &boolInserter{}, nil
+		return &boolInserter{builder: builder.(*array.BooleanBuilder)}, nil
 
 	// String types
 	case *arrow.StringType, *arrow.LargeStringType, *arrow.StringViewType:
-		return &stringInserter{}, nil
+		return &stringInserter{builder: builder.(array.StringLikeBuilder)}, nil
 
 	// Binary types
 	case *arrow.BinaryType, *arrow.LargeBinaryType, *arrow.BinaryViewType, *arrow.FixedSizeBinaryType:
-		return &binaryInserter{}, nil
+		return &binaryInserter{builder: builder.(array.BinaryLikeBuilder)}, nil
 
 	// Date types
 	case *arrow.Date32Type:
-		return &date32Inserter{}, nil
+		return &date32Inserter{builder: builder.(*array.Date32Builder)}, nil
 	case *arrow.Date64Type:
-		return &date64Inserter{}, nil
+		return &date64Inserter{builder: builder.(*array.Date64Builder)}, nil
 
 	// Time types
 	case *arrow.Time32Type:
-		return &time32Inserter{}, nil
+		return &time32Inserter{builder: builder.(*array.Time32Builder)}, nil
 	case *arrow.Time64Type:
-		return &time64Inserter{}, nil
+		return &time64Inserter{builder: builder.(*array.Time64Builder)}, nil
 
 	// Timestamp types
 	case *arrow.TimestampType:
-		return &timestampInserter{}, nil
+		return &timestampInserter{builder: builder.(*array.TimestampBuilder)}, nil
 
 	// Decimal types
 	case *arrow.Decimal32Type, *arrow.Decimal64Type, *arrow.Decimal128Type, *arrow.Decimal256Type:
-		return &decimalInserter{}, nil
+		return &decimalInserter{builder: builder}, nil
 
 	// Default fallback for unhandled types
 	default:
-		return &defaultInserter{}, nil
+		return &defaultInserter{builder: builder}, nil
 	}
 }
 
