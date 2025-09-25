@@ -41,6 +41,7 @@ type Driver struct {
 	driverName        string
 	typeConverter     TypeConverter
 	connectionFactory ConnectionFactory
+	dsnBuilder        DSNBuilder
 }
 
 // NewDriver creates a new sqlwrapper Driver with driver name and optional type converter.
@@ -56,7 +57,8 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter 
 		DriverImplBase:    base,
 		driverName:        driverName,
 		typeConverter:     converter,
-		connectionFactory: nil, // No custom factory by default
+		connectionFactory: nil,                  // No custom factory by default
+		dsnBuilder:        &DefaultDSNBuilder{}, // Default DSN builder
 	}
 }
 
@@ -68,6 +70,14 @@ func (d *Driver) WithConnectionFactory(factory ConnectionFactory) *Driver {
 	return d
 }
 
+// WithDSNBuilder sets a custom DSN builder for this driver.
+// This allows database-specific drivers to provide custom DSN construction logic
+// for handling URI, username, and password options.
+func (d *Driver) WithDSNBuilder(builder DSNBuilder) *Driver {
+	d.dsnBuilder = builder
+	return d
+}
+
 // NewDatabase is the main entrypoint for driver‐agnostic ADBC database creation.
 // It uses the driver name provided to NewDriver and expects opts[adbc.OptionKeyURI] to be the DSN/URI.
 func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
@@ -76,5 +86,5 @@ func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
 
 // NewDatabaseWithContext is the same, but lets you pass in a context.
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter, d.connectionFactory)
+	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter, d.connectionFactory, d.dsnBuilder)
 }

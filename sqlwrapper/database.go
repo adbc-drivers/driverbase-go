@@ -36,15 +36,16 @@ type databaseImpl struct {
 }
 
 // newDatabase constructs a new ADBC Database backed by *sql.DB.
-func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driverName string, opts map[string]string, typeConverter TypeConverter, connectionFactory ConnectionFactory) (adbc.Database, error) {
+func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driverName string, opts map[string]string, typeConverter TypeConverter, connectionFactory ConnectionFactory, dsnBuilder DSNBuilder) (adbc.Database, error) {
 	base, err := driverbase.NewDatabaseImplBase(ctx, drvImpl)
 	if err != nil {
 		return nil, drvImpl.ErrorHelper.IO("failed to initialize database base: %v", err)
 	}
 
-	dsn, ok := opts[adbc.OptionKeyURI]
-	if !ok || dsn == "" {
-		return nil, base.ErrorHelper.InvalidArgument("missing 'uri' option in sqlwrapper")
+	// Use DSN builder to construct the final DSN from options
+	dsn, err := dsnBuilder.BuildDSN(opts)
+	if err != nil {
+		return nil, base.ErrorHelper.InvalidArgument("failed to construct DSN: %v", err)
 	}
 
 	// Open the underlying SQL pool
