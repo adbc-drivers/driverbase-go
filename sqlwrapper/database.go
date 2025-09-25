@@ -36,22 +36,16 @@ type databaseImpl struct {
 }
 
 // newDatabase constructs a new ADBC Database backed by *sql.DB.
-func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driverName string, opts map[string]string, typeConverter TypeConverter, connectionFactory ConnectionFactory, dsnBuilder DSNBuilder) (adbc.Database, error) {
+func newDatabase(ctx context.Context, drvImpl *driverbase.DriverImplBase, driverName string, opts map[string]string, typeConverter TypeConverter, connectionFactory ConnectionFactory, dbFactory DBFactory) (adbc.Database, error) {
 	base, err := driverbase.NewDatabaseImplBase(ctx, drvImpl)
 	if err != nil {
 		return nil, drvImpl.ErrorHelper.IO("failed to initialize database base: %v", err)
 	}
 
-	// Use DSN builder to construct the final DSN from options
-	dsn, err := dsnBuilder.BuildDSN(opts)
+	// Use DB factory to create the *sql.DB from options
+	sqlDB, err := dbFactory.CreateDB(ctx, driverName, opts)
 	if err != nil {
-		return nil, base.ErrorHelper.InvalidArgument("failed to construct DSN: %v", err)
-	}
-
-	// Open the underlying SQL pool
-	sqlDB, err := sql.Open(driverName, dsn)
-	if err != nil {
-		return nil, base.ErrorHelper.IO("failed to open database: %v", err)
+		return nil, base.ErrorHelper.InvalidArgument("failed to create database: %v", err)
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {

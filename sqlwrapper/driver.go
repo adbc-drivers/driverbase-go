@@ -16,6 +16,9 @@ package sqlwrapper
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"net/url"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -34,6 +37,59 @@ type ConnectionFactory interface {
 	) (ConnectionImpl, error)
 }
 
+// DBFactory handles creation of *sql.DB from connection options.
+// Individual drivers can implement this to provide database-specific connection logic.
+type DBFactory interface {
+	CreateDB(ctx context.Context, driverName string, opts map[string]string) (*sql.DB, error)
+}
+
+// DefaultDBFactory provides standard database connection creation using sql.Open.
+// It builds a DSN using standard URI format with credential injection.
+type DefaultDBFactory struct{}
+
+// CreateDB creates a *sql.DB using sql.Open with a constructed DSN.
+func (f *DefaultDBFactory) CreateDB(ctx context.Context, driverName string, opts map[string]string) (*sql.DB, error) {
+	dsn, err := f.buildDSN(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return sql.Open(driverName, dsn)
+}
+
+// buildDSN constructs a DSN from the provided options using standard URI format.
+func (f *DefaultDBFactory) buildDSN(opts map[string]string) (string, error) {
+	baseURI := opts[adbc.OptionKeyURI]
+	username := opts[adbc.OptionKeyUsername]
+	password := opts[adbc.OptionKeyPassword]
+
+	if baseURI == "" {
+		return "", fmt.Errorf("missing required option %s", adbc.OptionKeyURI)
+	}
+
+	// If no credentials provided, return original URI
+	if username == "" && password == "" {
+		return baseURI, nil
+	}
+
+	// Parse URI and inject credentials
+	u, err := url.Parse(baseURI)
+	if err != nil {
+		return "", fmt.Errorf("invalid URI format: %w", err)
+	}
+
+	// Set user info if provided
+	if username != "" {
+		if password != "" {
+			u.User = url.UserPassword(username, password)
+		} else {
+			u.User = url.User(username)
+		}
+	}
+
+	return u.String(), nil
+}
+
 // Driver provides an ADBC driver implementation that wraps database/sql drivers.
 // It uses a configurable TypeConverter for SQL-to-Arrow type mapping and conversion.
 type Driver struct {
@@ -41,7 +97,7 @@ type Driver struct {
 	driverName        string
 	typeConverter     TypeConverter
 	connectionFactory ConnectionFactory
-	dsnBuilder        DSNBuilder
+	dbFactory         DBFactory
 }
 
 // NewDriver creates a new sqlwrapper Driver with driver name and optional type converter.
@@ -57,8 +113,8 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter 
 		DriverImplBase:    base,
 		driverName:        driverName,
 		typeConverter:     converter,
-		connectionFactory: nil,                  // No custom factory by default
-		dsnBuilder:        &DefaultDSNBuilder{}, // Default DSN builder
+		connectionFactory: nil,                 // No custom factory by default
+		dbFactory:         &DefaultDBFactory{}, // Default DB factory
 	}
 }
 
@@ -70,11 +126,11 @@ func (d *Driver) WithConnectionFactory(factory ConnectionFactory) *Driver {
 	return d
 }
 
-// WithDSNBuilder sets a custom DSN builder for this driver.
-// This allows database-specific drivers to provide custom DSN construction logic
+// WithDBFactory sets a custom DB factory for this driver.
+// This allows database-specific drivers to provide custom sql.DB creation logic
 // for handling URI, username, and password options.
-func (d *Driver) WithDSNBuilder(builder DSNBuilder) *Driver {
-	d.dsnBuilder = builder
+func (d *Driver) WithDBFactory(factory DBFactory) *Driver {
+	d.dbFactory = factory
 	return d
 }
 
@@ -86,5 +142,5 @@ func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
 
 // NewDatabaseWithContext is the same, but lets you pass in a context.
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter, d.connectionFactory, d.dsnBuilder)
+	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter, d.connectionFactory, d.dbFactory)
 }
