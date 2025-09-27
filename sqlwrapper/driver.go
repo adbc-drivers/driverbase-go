@@ -54,7 +54,7 @@ type Driver struct {
 
 // NewDriver creates a new sqlwrapper Driver with driver name, required DBFactory, and optional type converter.
 // If converter is nil, uses DefaultTypeConverter.
-func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter TypeConverter, dbFactory DBFactory) *Driver {
+func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory DBFactory, converter TypeConverter) *Driver {
 	if converter == nil {
 		converter = DefaultTypeConverter{}
 	}
