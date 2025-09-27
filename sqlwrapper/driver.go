@@ -52,10 +52,9 @@ type Driver struct {
 	dbFactory         DBFactory
 }
 
-// NewDriver creates a new sqlwrapper Driver with driver name and optional type converter.
+// NewDriver creates a new sqlwrapper Driver with driver name, required DBFactory, and optional type converter.
 // If converter is nil, uses DefaultTypeConverter.
-// Drivers must call WithDBFactory() to set a database-specific DBFactory implementation.
-func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter TypeConverter) *Driver {
+func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter TypeConverter, dbFactory DBFactory) *Driver {
 	if converter == nil {
 		converter = DefaultTypeConverter{}
 	}
@@ -67,7 +66,7 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter 
 		driverName:        driverName,
 		typeConverter:     converter,
 		connectionFactory: nil, // No custom factory by default
-		dbFactory:         nil, // Must be set explicitly with WithDBFactory()
+		dbFactory:         dbFactory,
 	}
 }
 
@@ -79,14 +78,6 @@ func (d *Driver) WithConnectionFactory(factory ConnectionFactory) *Driver {
 	return d
 }
 
-// WithDBFactory sets a custom DB factory for this driver.
-// This allows database-specific drivers to provide custom sql.DB creation logic
-// for handling URI, username, and password options.
-func (d *Driver) WithDBFactory(factory DBFactory) *Driver {
-	d.dbFactory = factory
-	return d
-}
-
 // NewDatabase is the main entrypoint for driver‐agnostic ADBC database creation.
 // It uses the driver name provided to NewDriver and expects opts[adbc.OptionKeyURI] to be the DSN/URI.
 func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
@@ -95,8 +86,5 @@ func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
 
 // NewDatabaseWithContext is the same, but lets you pass in a context.
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	if d.dbFactory == nil {
-		return nil, d.ErrorHelper.InvalidArgument("no DBFactory configured - use WithDBFactory() to set one")
-	}
 	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter, d.connectionFactory, d.dbFactory)
 }
