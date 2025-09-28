@@ -17,6 +17,7 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -84,7 +85,52 @@ func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
 	return d.NewDatabaseWithContext(context.Background(), opts)
 }
 
+// databaseImpl implements the ADBC Database interface on top of database/sql.
+type databaseImpl struct {
+	driverbase.DatabaseImplBase
+
+	// db is the Go SQL handle (connection pool)
+	db *sql.DB
+	// typeConverter handles SQL-to-Arrow type conversion
+	typeConverter TypeConverter
+	// connectionFactory creates custom connection implementations if provided
+	connectionFactory ConnectionFactory
+}
+
 // NewDatabaseWithContext is the same, but lets you pass in a context.
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	return newDatabase(ctx, &d.DriverImplBase, d.driverName, opts, d.typeConverter, d.connectionFactory, d.dbFactory)
+	base, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase)
+	if err != nil {
+		return nil, d.ErrorHelper.IO("failed to initialize database base: %v", err)
+	}
+
+	// Use DB factory to create the *sql.DB from options
+	sqlDB, err := d.dbFactory.CreateDB(ctx, d.driverName, opts)
+	if err != nil {
+		return nil, base.ErrorHelper.InvalidArgument("failed to create database: %v", err)
+	}
+
+	if err := sqlDB.PingContext(ctx); err != nil {
+		err = errors.Join(err, sqlDB.Close())
+		return nil, base.ErrorHelper.IO("failed to ping database: %v", err)
+	}
+
+	// Construct and return the ADBC Database wrapper
+	db := &databaseImpl{
+		DatabaseImplBase:  base,
+		db:                sqlDB,
+		typeConverter:     d.typeConverter,
+		connectionFactory: d.connectionFactory,
+	}
+	return driverbase.NewDatabase(db), nil
+}
+
+// Open creates a new ADBC Connection (session) by acquiring a *sql.Conn.
+func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
+	return newConnection(ctx, d)
+}
+
+// Closes the database and its underlying connection pool.
+func (d *databaseImpl) Close() error {
+	return d.db.Close()
 }
