@@ -571,7 +571,9 @@ func (d DefaultTypeConverter) CreateInserter(field *arrow.Field, builder array.B
 }
 
 // DefaultTypeConverter provides the default SQL-to-Arrow type conversion
-type DefaultTypeConverter struct{}
+type DefaultTypeConverter struct {
+	VendorName string
+}
 
 // convertPrecisionToTimeUnit converts fractional seconds precision to Arrow TimeUnit
 // Clamps precision to maximum supported value (9 fractional digits = nanoseconds)
@@ -923,7 +925,7 @@ func (d DefaultTypeConverter) ConvertRawColumnType(colType ColumnType) (arrow.Da
 	}
 
 	// For all other types, use the existing conversion with already-parsed values
-	arrowType := mapSQLTypeNameToArrowType(typeName)
+	arrowType := d.mapSQLTypeNameToArrowType(typeName)
 
 	// Build metadata with original SQL type information
 	metadataMap := map[string]string{
@@ -947,8 +949,8 @@ func (d DefaultTypeConverter) ConvertRawColumnType(colType ColumnType) (arrow.Da
 	return arrowType, nullable, metadata, nil
 }
 
-// sqlTypeToArrow converts SQL type name to Arrow data type using pre-parsed values
-func mapSQLTypeNameToArrowType(typeName string) arrow.DataType {
+// mapSQLTypeNameToArrowType converts SQL type name to Arrow data type using pre-parsed values
+func (d DefaultTypeConverter) mapSQLTypeNameToArrowType(typeName string) arrow.DataType {
 	switch typeName {
 	// Integer types
 	case "INT", "INTEGER", "MEDIUMINT":
@@ -997,9 +999,13 @@ func mapSQLTypeNameToArrowType(typeName string) arrow.DataType {
 		jsonType, _ := extensions.NewJSONType(arrow.BinaryTypes.String)
 		return jsonType
 
-	// Default to string for unknown types
+	// Return opaque type for unknown types
 	default:
-		opaqueType := extensions.NewOpaqueType(arrow.BinaryTypes.String, "UNKNOWN", "UNKNOWN")
+		vendorName := d.VendorName
+		if vendorName == "" {
+			vendorName = "UNKNOWN"
+		}
+		opaqueType := extensions.NewOpaqueType(arrow.BinaryTypes.String, typeName, vendorName)
 		return opaqueType
 	}
 }

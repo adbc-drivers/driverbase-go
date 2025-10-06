@@ -47,7 +47,7 @@ type Driver struct {
 // If converter is nil, uses DefaultTypeConverter.
 func NewDriver(alloc memory.Allocator, driverName, vendorName string, converter TypeConverter) *Driver {
 	if converter == nil {
-		converter = DefaultTypeConverter{}
+		converter = DefaultTypeConverter{VendorName: vendorName}
 	}
 	info := driverbase.DefaultDriverInfo(vendorName)
 	base := driverbase.NewDriverImplBase(info, alloc)
