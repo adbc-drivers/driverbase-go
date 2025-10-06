@@ -999,9 +999,8 @@ func mapSQLTypeNameToArrowType(typeName string) arrow.DataType {
 
 	// Default to string for unknown types
 	default:
-		// TODO (https://github.com/adbc-drivers/driverbase-go/issues/30):
-		// Consider using the Opaque extension type instead of treating unknown types as strings.
-		return arrow.BinaryTypes.String
+		opaqueType := extensions.NewOpaqueType(arrow.BinaryTypes.String, "UNKNOWN", "UNKNOWN")
+		return opaqueType
 	}
 }
 
