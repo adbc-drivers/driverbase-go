@@ -28,8 +28,10 @@ package validation
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -87,6 +89,12 @@ type DriverQuirks interface {
 	DBSchema() string
 
 	Alloc() memory.Allocator
+}
+
+// TableQuoter is an optional interface that DriverQuirks implementations
+// can implement to provide database-specific table name quoting
+type TableQuoter interface {
+	QuoteTableName(tableName string) string
 }
 
 type DatabaseTests struct {
@@ -666,6 +674,61 @@ func (s *StatementTests) TearDownTest() {
 	s.Driver = nil
 }
 
+// getQuotedTableName returns a properly quoted table name, using the driver's
+// QuoteTableName method if available, otherwise falls back to double quotes
+func (s *StatementTests) getQuotedTableName(tableName string) string {
+	if quoter, ok := s.Quirks.(TableQuoter); ok {
+		return quoter.QuoteTableName(tableName)
+	}
+	// Default fallback - use double quotes
+	return fmt.Sprintf(`"%s"`, tableName)
+}
+
+// sortInt64ArrayOrderByDescNullsLast sorts Int64 array to match "ORDER BY col DESC NULLS LAST" behavior:
+// non-null values in descending order, then nulls at the end
+func sortInt64ArrayOrderByDescNullsLast(arr *array.Int64) *array.Int64 {
+	type item struct {
+		value  int64
+		isNull bool
+	}
+
+	items := make([]item, arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		items[i] = item{
+			value:  arr.Value(i),
+			isNull: arr.IsNull(i),
+		}
+	}
+
+	// Sort: non-nulls descending, then nulls last
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].isNull && items[j].isNull {
+			return false // equal nulls
+		}
+		if items[i].isNull {
+			return false // null goes last
+		}
+		if items[j].isNull {
+			return true // non-null comes before null
+		}
+		return items[i].value > items[j].value // descending
+	})
+
+	// Build new sorted array
+	builder := array.NewInt64Builder(memory.DefaultAllocator)
+	defer builder.Release()
+
+	for _, item := range items {
+		if item.isNull {
+			builder.AppendNull()
+		} else {
+			builder.Append(item.value)
+		}
+	}
+
+	return builder.NewInt64Array()
+}
+
 func (s *StatementTests) TestNewStatement() {
 	stmt, err := s.Cnxn.NewStatement()
 	s.NoError(err)
@@ -947,13 +1010,8 @@ func (s *StatementTests) TestSqlIngestInts() {
 		s.FailNowf("invalid number of affected rows", "should be -1 or 3, got: %d", affected)
 	}
 
-	// use order by clause to ensure we get the same order as the input batch
-	s.Require().NoError(stmt.SetSqlQuery(`
-    SELECT * FROM bulk_ingest
-    ORDER BY
-        CASE WHEN int64s IS NULL THEN 1 ELSE 0 END,
-        int64s DESC
-	`))
+	s.Require().NoError(stmt.SetSqlQuery(
+		fmt.Sprintf("SELECT * FROM %s", s.getQuotedTableName("bulk_ingest"))))
 	rdr, rows, err := stmt.ExecuteQuery(s.ctx)
 	s.Require().NoError(err)
 	if rows != -1 && rows != 3 {
@@ -967,7 +1025,11 @@ func (s *StatementTests) TestSqlIngestInts() {
 	s.EqualValues(3, rec.NumRows())
 	s.EqualValues(1, rec.NumCols())
 
-	s.Truef(array.Equal(rec.Column(0), batch.Column(0)), "expected: %s\ngot: %s", batch.Column(0), rec.Column(0))
+	// Sort actual result to match what ORDER BY would have produced
+	actualSorted := sortInt64ArrayOrderByDescNullsLast(rec.Column(0).(*array.Int64))
+	defer actualSorted.Release()
+
+	s.Truef(array.Equal(batch.Column(0), actualSorted), "expected: %s\ngot: %s", batch.Column(0), actualSorted)
 
 	s.Require().False(rdr.Next())
 	s.Require().NoError(rdr.Err())
@@ -1023,13 +1085,8 @@ func (s *StatementTests) TestSqlIngestAppend() {
 		s.FailNowf("invalid number of affected rows", "should be -1 or 2, got: %d", affected)
 	}
 
-	// use order by clause to ensure we get the same order as the input batch
-	s.Require().NoError(stmt.SetSqlQuery(`
-    SELECT * FROM bulk_ingest
-    ORDER BY
-        CASE WHEN int64s IS NULL THEN 1 ELSE 0 END,
-        int64s DESC
-	`))
+	s.Require().NoError(stmt.SetSqlQuery(
+		fmt.Sprintf("SELECT * FROM %s", s.getQuotedTableName("bulk_ingest"))))
 	rdr, rows, err := stmt.ExecuteQuery(s.ctx)
 	s.Require().NoError(err)
 	if rows != -1 && rows != 3 {
@@ -1046,7 +1103,12 @@ func (s *StatementTests) TestSqlIngestAppend() {
 	exp, err := array.Concatenate([]arrow.Array{batch.Column(0), batch2.Column(0)}, s.Quirks.Alloc())
 	s.Require().NoError(err)
 	defer exp.Release()
-	s.Truef(array.Equal(rec.Column(0), exp), "expected: %s\ngot: %s", exp, rec.Column(0))
+
+	// Sort actual result to match what ORDER BY would have produced
+	actualSorted := sortInt64ArrayOrderByDescNullsLast(rec.Column(0).(*array.Int64))
+	defer actualSorted.Release()
+
+	s.Truef(array.Equal(exp, actualSorted), "expected: %s\ngot: %s", exp, actualSorted)
 
 	s.Require().False(rdr.Next())
 	s.Require().NoError(rdr.Err())
@@ -1103,7 +1165,8 @@ func (s *StatementTests) TestSqlIngestReplace() {
 		s.FailNowf("invalid number of affected rows", "should be -1 or 1, got: %d", affected)
 	}
 
-	s.Require().NoError(stmt.SetSqlQuery(`SELECT * FROM bulk_ingest`))
+	s.Require().NoError(stmt.SetSqlQuery(
+		fmt.Sprintf("SELECT * FROM %s", s.getQuotedTableName("bulk_ingest"))))
 	rdr, rows, err := stmt.ExecuteQuery(s.ctx)
 	s.Require().NoError(err)
 	if rows != -1 && rows != 1 {
@@ -1168,7 +1231,8 @@ func (s *StatementTests) TestSqlIngestCreateAppend() {
 	}
 
 	// validate
-	s.Require().NoError(stmt.SetSqlQuery(`SELECT * FROM bulk_ingest`))
+	s.Require().NoError(stmt.SetSqlQuery(
+		fmt.Sprintf("SELECT * FROM %s", s.getQuotedTableName("bulk_ingest"))))
 	rdr, rows, err := stmt.ExecuteQuery(s.ctx)
 	s.Require().NoError(err)
 	if rows != -1 && rows != 2 {
