@@ -954,7 +954,6 @@ func (s *StatementTests) TestSqlIngestInts() {
         CASE WHEN int64s IS NULL THEN 1 ELSE 0 END,
         int64s DESC
 	`))
-
 	rdr, rows, err := stmt.ExecuteQuery(s.ctx)
 	s.Require().NoError(err)
 	if rows != -1 && rows != 3 {
