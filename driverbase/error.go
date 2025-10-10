@@ -56,3 +56,43 @@ func (helper *ErrorHelper) NotImplemented(message string, format ...any) error {
 func (helper *ErrorHelper) IO(message string, format ...any) error {
 	return helper.Errorf(adbc.StatusIO, message, format...)
 }
+
+func (helper *ErrorHelper) NotFound(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusNotFound, message, format...)
+}
+
+func (helper *ErrorHelper) Unknown(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusUnknown, message, format...)
+}
+
+func (helper *ErrorHelper) AlreadyExists(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusAlreadyExists, message, format...)
+}
+
+func (helper *ErrorHelper) InvalidData(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusInvalidData, message, format...)
+}
+
+func (helper *ErrorHelper) Integrity(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusIntegrity, message, format...)
+}
+
+func (helper *ErrorHelper) Internal(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusInternal, message, format...)
+}
+
+func (helper *ErrorHelper) Cancelled(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusCancelled, message, format...)
+}
+
+func (helper *ErrorHelper) Timeout(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusTimeout, message, format...)
+}
+
+func (helper *ErrorHelper) Unauthenticated(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusUnauthenticated, message, format...)
+}
+
+func (helper *ErrorHelper) Unauthorized(message string, format ...any) error {
+	return helper.Errorf(adbc.StatusUnauthorized, message, format...)
+}
