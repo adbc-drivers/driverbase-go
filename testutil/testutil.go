@@ -32,6 +32,15 @@ func CheckedClose(t *testing.T, obj io.Closer) {
 	}
 }
 
+// ArrayFromJSON is the same as array.FromJSON, but fails the test on error.
+func ArrayFromJSON(t *testing.T, mem memory.Allocator, dt arrow.DataType, json string) arrow.Array {
+	record, _, err := array.FromJSON(mem, dt, bytes.NewReader([]byte(json)))
+	if err != nil {
+		t.Fatalf("failed to create array from JSON: %v", err)
+	}
+	return record
+}
+
 // RecordFromJSON is the same as array.RecordFromJSON, but fails the test on error.
 func RecordFromJSON(t *testing.T, mem memory.Allocator, schema *arrow.Schema, json string) arrow.RecordBatch {
 	record, _, err := array.RecordFromJSON(mem, schema, bytes.NewReader([]byte(json)))
