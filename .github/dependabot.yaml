@@ -31,6 +31,7 @@ updates:
     directories:
       - "driverbase"
       - "testutil"
+      - "validation"
     groups:
       "golang.org/x":
         applies-to: version-updates

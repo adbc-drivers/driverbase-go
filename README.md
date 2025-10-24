@@ -17,8 +17,35 @@
 # Go Framework for Apache Arrow ADBC Drivers
 
 This is a framework for developing ADBC drivers in Go.  It is forked from the
-(internal and hence inaccessible) framework upstream in
-[apache/arrow-adbc](https://github.com/apache/arrow-adbc/).
+framework upstream in [apache/arrow-adbc](https://github.com/apache/arrow-adbc/).
+The upstream framework is marked as an internal package, and is hence not
+usable from outside the repository itself.
 
-`driverbase` contains the framework.  `testutil` contains some common helpers
-for writing unit tests.
+## Installation
+
+This is not meant to be installed directly.
+
+Developers can add this to a project via `go get`:
+
+```shell
+go get github.com/adbc-drivers/driverbase-go/driverbase
+go get github.com/adbc-drivers/driverbase-go/testutil
+go get github.com/adbc-drivers/driverbase-go/validation
+```
+
+## Usage
+
+- `driverbase` is a framework for building ADBC drivers.
+- `testutil` contains common helpers for writing unit tests.
+- `validation` contains basic integration tests for ADBC drivers.
+
+Currently there is no other documentation.  Eventually, API documentation will
+be made available on go.dev.
+
+## Building
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).

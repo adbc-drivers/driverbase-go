@@ -16,14 +16,37 @@
 
 # How to Contribute
 
-## Reporting Issues
+All contributors are expected to follow the [Code of
+Conduct](https://github.com/adbc-drivers/driverbase-go?tab=coc-ov-file#readme).
 
-Please file issues on the GitHub issue tracker:
-https://github.com/adbc-drivers/driverbase-go/issues
+## Reporting Issues and Making Feature Requests
+
+Please file issues, questions, and feature requests on the GitHub issue
+tracker: https://github.com/adbc-drivers/driverbase-go/issues
 
 Potential security vulnerabilities should be reported to
 [security@adbc-drivers.org](mailto:security@adbc-drivers.org) instead.  See
-[SECURITY.md](./SECURITY.md).
+the [Security Policy](https://github.com/adbc-drivers/driverbase-go?tab=security-ov-file#readme).
+
+## Build and Test
+
+You will need the latest release of [Go](https://go.dev/).
+
+You can build and run tests using the standard Go commands from one of the
+project subdirectories (`driverbase/`, `testutil/`, or `validation/`):
+
+```shell
+go build ./...
+go test ./...
+```
+
+Code style, linting, and other static checks are enforced via
+[pre-commit](https://pre-commit.com/).  Install pre-commit, then check your
+code:
+
+```shell
+pre-commit run --all-files
+```
 
 ## Opening a Pull Request
 
@@ -41,11 +64,13 @@ Before opening a pull request:
 
 When writing the pull request description:
 
+- Commit messages will be ignored.  We squash-merge all pull requests.
 - Ensure the title follows [Conventional
   Commits](https://www.conventionalcommits.org/en/v1.0.0/) format.  The
-  component should be either `driverbase` or `testutil` (in general: it should
-  be a directory path relative to the repo root, e.g. `driverbase/arrowext` is
-  also valid).  Example titles:
+  component should be either `driverbase`, `testutil`, or `validation` (in
+  general: it should be a directory path relative to the repo root,
+  e.g. `driverbase/arrowext` is also valid).  Example titles:
+
   - `feat(driverbase): implement record reader framework`
   - `chore(testutil): update stretchr/testify dependency`
   - `refactor(driverbase)!: manage statement state internally`
