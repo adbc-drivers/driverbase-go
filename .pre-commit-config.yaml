@@ -34,6 +34,12 @@ repos:
     types_or: [go, go-mod]
 
   - id: golangci-lint
+    name: lint ffitemplate
+    entry: bash -c 'cd ffitemplate && golangci-lint run --fix --timeout 5m'
+    files: ^ffitemplate/
+    types_or: [go, go-mod]
+
+  - id: golangci-lint
     name: lint testutil
     entry: bash -c 'cd testutil && golangci-lint run --fix --timeout 5m'
     files: ^testutil/
@@ -77,6 +83,12 @@ repos:
     language: system
     types: [go]
     entry: bash -c 'cd driverbase && go fix'
+    pass_filenames: false
+  - id: gofix-ffitemplate
+    name: go fix /ffitemplate
+    language: system
+    types: [go]
+    entry: bash -c 'cd ffitemplate && go fix'
     pass_filenames: false
   - id: gofix-sqlwrapper
     name: go fix /sqlwrapper
