@@ -53,17 +53,17 @@ func (s *BaseRecordReaderSuite) TestInitErrors() {
 	// staticcheck tries to make the nil context here non-nil, but we're intentionally
 	// testing a nil context.
 	// nolint:staticcheck
-	s.Error(rr.Init(nil, s.mem, nil, 0, nil))
-	s.Error(rr.Init(s.ctx, nil, nil, 0, nil))
-	s.Error(rr.Init(s.ctx, s.mem, nil, 0, nil))
+	s.Error(rr.Init(nil, s.mem, nil, BaseRecordReaderOptions{}, nil))
+	s.Error(rr.Init(s.ctx, nil, nil, BaseRecordReaderOptions{}, nil))
+	s.Error(rr.Init(s.ctx, s.mem, nil, BaseRecordReaderOptions{}, nil))
 }
 
 type implNoInitialResultSet struct {
 	beganAppending bool
 }
 
-func (s *implNoInitialResultSet) AppendRow(builder *array.RecordBuilder) error {
-	return io.EOF
+func (s *implNoInitialResultSet) AppendRow(builder *array.RecordBuilder) (int64, error) {
+	return 0, io.EOF
 }
 func (s *implNoInitialResultSet) BeginAppending(builder *array.RecordBuilder) error {
 	s.beganAppending = true
@@ -80,7 +80,7 @@ func (s *implNoInitialResultSet) NextResultSet(ctx context.Context, rec arrow.Re
 func (s *BaseRecordReaderSuite) TestInitNoInitialResultSet() {
 	rr := &BaseRecordReader{}
 	defer rr.Release()
-	s.ErrorContains(rr.Init(s.ctx, s.mem, nil, 0, &implNoInitialResultSet{}), "no result set")
+	s.ErrorContains(rr.Init(s.ctx, s.mem, nil, BaseRecordReaderOptions{}, &implNoInitialResultSet{}), "no result set")
 }
 
 // When there are parameters but the parameters are empty, we get back an empty reader
@@ -92,7 +92,7 @@ func (s *BaseRecordReaderSuite) TestInitNoParams() {
 	schema := arrow.NewSchema([]arrow.Field{}, nil)
 	params, err := array.NewRecordReader(schema, []arrow.RecordBatch{})
 	s.NoError(err)
-	s.NoError(rr.Init(s.ctx, s.mem, params, 0, impl))
+	s.NoError(rr.Init(s.ctx, s.mem, params, BaseRecordReaderOptions{}, impl))
 	s.False(rr.Next())
 	s.True(schema.Equal(rr.Schema()))
 	s.NoError(rr.Err())
@@ -105,8 +105,8 @@ type implBeginAppending struct {
 	beganAppending int
 }
 
-func (s *implBeginAppending) AppendRow(builder *array.RecordBuilder) error {
-	return io.EOF
+func (s *implBeginAppending) AppendRow(builder *array.RecordBuilder) (int64, error) {
+	return 0, io.EOF
 }
 func (s *implBeginAppending) BeginAppending(builder *array.RecordBuilder) error {
 	s.beganAppending++
@@ -135,7 +135,7 @@ func (s *BaseRecordReaderSuite) TestInitBeginAppending() {
 	}
 	rr := &BaseRecordReader{}
 	defer rr.Release()
-	s.NoError(rr.Init(s.ctx, s.mem, nil, 0, impl))
+	s.NoError(rr.Init(s.ctx, s.mem, nil, BaseRecordReaderOptions{}, impl))
 	s.False(rr.Next())
 	s.True(impl.schema.Equal(rr.Schema()))
 	s.NoError(rr.Err())
@@ -155,13 +155,13 @@ type implNextCallsClose struct {
 	appended int
 }
 
-func (s *implNextCallsClose) AppendRow(builder *array.RecordBuilder) error {
+func (s *implNextCallsClose) AppendRow(builder *array.RecordBuilder) (int64, error) {
 	if s.appended < 2 {
 		builder.Field(0).(*array.Int32Builder).Append(1)
 		s.appended++
-		return nil
+		return 1, nil
 	}
-	return io.EOF
+	return 0, io.EOF
 }
 func (s *implNextCallsClose) BeginAppending(builder *array.RecordBuilder) error {
 	return nil
@@ -186,8 +186,8 @@ func (s *BaseRecordReaderSuite) TestNextCallsClose() {
 		impl := &implNextCallsClose{}
 		rr := &BaseRecordReader{}
 		defer rr.Release()
-		// batch size == 2
-		s.NoError(rr.Init(s.ctx, s.mem, nil, 2, impl))
+		options := BaseRecordReaderOptions{BatchRowLimit: 2}
+		s.NoError(rr.Init(s.ctx, s.mem, nil, options, impl))
 		s.True(rr.Next())
 		s.Equal(int64(2), rr.Record().NumRows())
 		s.False(rr.done)
@@ -204,8 +204,8 @@ func (s *BaseRecordReaderSuite) TestNextCallsClose() {
 		impl := &implNextCallsClose{}
 		rr := &BaseRecordReader{}
 		defer rr.Release()
-		// batch size == 4
-		s.NoError(rr.Init(s.ctx, s.mem, nil, 4, impl))
+		options := BaseRecordReaderOptions{BatchRowLimit: 4}
+		s.NoError(rr.Init(s.ctx, s.mem, nil, options, impl))
 		s.True(rr.Next())
 		s.Equal(int64(2), rr.Record().NumRows())
 		s.True(rr.done)
@@ -222,17 +222,17 @@ type implNextResultSetAcrossParams struct {
 	appended  int
 }
 
-func (s *implNextResultSetAcrossParams) AppendRow(builder *array.RecordBuilder) error {
+func (s *implNextResultSetAcrossParams) AppendRow(builder *array.RecordBuilder) (int64, error) {
 	if s.resultSet >= 2 && s.resultSet <= 4 {
 		// These result sets are empty
-		return io.EOF
+		return 0, io.EOF
 	}
 	if s.appended < 2 {
 		builder.Field(0).(*array.Int32Builder).Append(1)
 		s.appended++
-		return nil
+		return 1, nil
 	}
-	return io.EOF
+	return 0, io.EOF
 }
 func (s *implNextResultSetAcrossParams) BeginAppending(builder *array.RecordBuilder) error {
 	return nil
@@ -264,8 +264,8 @@ func (s *BaseRecordReaderSuite) TestNextResultSetAcrossParams() {
 	impl := &implNextResultSetAcrossParams{}
 	rr := &BaseRecordReader{}
 	defer rr.Release()
-	// batch size == 4
-	s.NoError(rr.Init(s.ctx, s.mem, params, 4, impl))
+	options := BaseRecordReaderOptions{BatchRowLimit: 4}
+	s.NoError(rr.Init(s.ctx, s.mem, params, options, impl))
 
 	s.True(rr.Next())
 	s.Equal(int64(4), rr.Record().NumRows())
@@ -278,5 +278,51 @@ func (s *BaseRecordReaderSuite) TestNextResultSetAcrossParams() {
 
 	s.False(rr.Next())
 
+	s.NoError(rr.Err())
+}
+
+type implNextByteLimit struct {
+	implNextCallsClose
+}
+
+func (s *implNextByteLimit) AppendRow(builder *array.RecordBuilder) (int64, error) {
+	if s.appended < 2 {
+		builder.Field(0).(*array.Int32Builder).Append(1)
+		s.appended++
+		return 6, nil
+	}
+	if s.appended < 4 {
+		builder.Field(0).(*array.Int32Builder).Append(1)
+		s.appended++
+		return 20, nil
+	}
+	return 0, io.EOF
+}
+
+func (s *BaseRecordReaderSuite) TestByteLimit() {
+	impl := &implNextByteLimit{}
+	rr := &BaseRecordReader{}
+	defer rr.Release()
+	options := BaseRecordReaderOptions{BatchByteLimit: 10}
+	s.NoError(rr.Init(s.ctx, s.mem, nil, options, impl))
+
+	s.True(rr.Next())
+	s.Equal(int64(2), rr.Record().NumRows())
+	s.False(rr.done)
+	s.NotNil(rr.impl)
+
+	s.True(rr.Next())
+	s.Equal(int64(1), rr.Record().NumRows())
+	s.False(rr.done)
+	s.NotNil(rr.impl)
+
+	s.True(rr.Next())
+	s.Equal(int64(1), rr.Record().NumRows())
+	s.False(rr.done)
+	s.NotNil(rr.impl)
+
+	s.False(rr.Next())
+	s.True(rr.done)
+	s.Nil(rr.impl)
 	s.NoError(rr.Err())
 }
