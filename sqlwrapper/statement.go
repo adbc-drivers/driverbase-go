@@ -277,8 +277,11 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 	// connection for some reason.
 	// TODO(lidavidm): when given ctx is cancelled, cancel the query, but
 	// not in a way that breaks the connection!
+	options := driverbase.BaseRecordReaderOptions{
+		BatchRowLimit: int64(s.batchSize),
+	}
 	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.boundStream,
-		int64(s.batchSize), impl); err != nil {
+		options, impl); err != nil {
 		// Clear boundStream on error to prevent double-release in Close()
 		s.boundStream = nil
 		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)

@@ -31,8 +31,8 @@ type RecordReaderImpl interface {
 	io.Closer
 	// AppendRow adds a row of the current result set to the record
 	// builder. Return io.EOF if no more rows can be appended from the
-	// current result set.
-	AppendRow(builder *array.RecordBuilder) error
+	// current result set. Return an estimate of row size.
+	AppendRow(builder *array.RecordBuilder) (int64, error)
 	// BeginAppending is called exactly once before the first call to
 	// AppendRow. The implementation can do any necessary initialization
 	// here. It will be called after the first call to NextResultSet.
@@ -51,12 +51,11 @@ type BaseRecordReader struct {
 	ctx      context.Context
 	alloc    memory.Allocator
 	// bind parameters or nil
-	params array.RecordReader
-	// rows in a batch to target
-	batchSize int64
-	impl      RecordReaderImpl
-	schema    *arrow.Schema
-	builder   *array.RecordBuilder
+	params  array.RecordReader
+	options BaseRecordReaderOptions
+	impl    RecordReaderImpl
+	schema  *arrow.Schema
+	builder *array.RecordBuilder
 
 	// The next nextBatch to be yielded
 	nextBatch arrow.RecordBatch
@@ -69,8 +68,22 @@ type BaseRecordReader struct {
 	done       bool
 }
 
+type BaseRecordReaderOptions struct {
+	BatchByteLimit int64
+	BatchRowLimit  int64
+}
+
+func (options *BaseRecordReaderOptions) validate() error {
+	if options.BatchRowLimit < 0 {
+		return errors.New("driverbase: BaseRecordReaderOptions: BatchRowLimit must be non-negative")
+	} else if options.BatchRowLimit == 0 {
+		options.BatchRowLimit = 65536
+	}
+	return nil
+}
+
 // Init initializes the state for the record reader.
-func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, params array.RecordReader, batchSize int64, impl RecordReaderImpl) (err error) {
+func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, params array.RecordReader, options BaseRecordReaderOptions, impl RecordReaderImpl) (err error) {
 	rr.refCount = 1
 
 	if ctx == nil {
@@ -79,16 +92,14 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 		return errors.New("driverbase: BaseRecordReader: must provide alloc")
 	} else if impl == nil {
 		return errors.New("driverbase: BaseRecordReader: must provide impl")
-	} else if batchSize == 0 {
-		batchSize = 65536
-	} else if batchSize < 0 {
-		return errors.New("driverbase: BaseRecordReader: batchSize must be non-negative")
+	} else if err := options.validate(); err != nil {
+		return err
 	}
 
 	rr.ctx = ctx
 	rr.alloc = alloc
 	rr.params = params
-	rr.batchSize = batchSize
+	rr.options = options
 	rr.impl = impl
 
 	// Initialize the builder and get the first result set
@@ -156,8 +167,9 @@ func (rr *BaseRecordReader) Next() bool {
 	}
 
 	rows := int64(0)
-	for rows < rr.batchSize {
-		err := rr.impl.AppendRow(rr.builder)
+	batchSize := int64(0)
+	for rows < rr.options.BatchRowLimit {
+		size, err := rr.impl.AppendRow(rr.builder)
 		if err == io.EOF {
 			// No more rows in this result set, advance to the
 			// next one (if possible, this only happens if we have
@@ -189,6 +201,11 @@ func (rr *BaseRecordReader) Next() bool {
 			return false
 		}
 		rows++
+		batchSize += size
+
+		if rr.options.BatchByteLimit > 0 && batchSize >= rr.options.BatchByteLimit {
+			break
+		}
 	}
 	rr.nextBatch = rr.builder.NewRecordBatch()
 	if rows == 0 && rr.done {
