@@ -326,3 +326,41 @@ func (s *BaseRecordReaderSuite) TestByteLimit() {
 	s.Nil(rr.impl)
 	s.NoError(rr.Err())
 }
+
+type implOverflow struct {
+	implNextCallsClose
+}
+
+func (s *implOverflow) AppendRow(builder *array.RecordBuilder) (int64, error) {
+	s.appended++
+	if s.appended == 2 {
+		return 0, ErrOverflow
+	}
+	if s.appended < 5 {
+		builder.Field(0).(*array.Int32Builder).Append(1)
+		return 20, nil
+	}
+	return 0, io.EOF
+}
+
+func (s *BaseRecordReaderSuite) TestOverflow() {
+	impl := &implOverflow{}
+	rr := &BaseRecordReader{}
+	defer rr.Release()
+	options := BaseRecordReaderOptions{}
+	s.NoError(rr.Init(s.ctx, s.mem, nil, options, impl))
+
+	s.True(rr.Next())
+	s.Equal(int64(1), rr.Record().NumRows())
+	s.False(rr.done)
+	s.NotNil(rr.impl)
+
+	s.True(rr.Next())
+	s.Equal(int64(2), rr.Record().NumRows())
+	s.True(rr.done)
+	s.NotNil(rr.impl)
+
+	s.False(rr.Next())
+	s.Nil(rr.impl)
+	s.NoError(rr.Err())
+}

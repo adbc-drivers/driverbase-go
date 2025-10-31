@@ -25,13 +25,17 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
+var ErrOverflow = errors.New("driverbase: value overflow")
+
 // RecordReaderImpl is a row-wise implementation of a record reader.  The
 // driverbase can pivot this into an array.RecordReader.
 type RecordReaderImpl interface {
 	io.Closer
 	// AppendRow adds a row of the current result set to the record
 	// builder. Return io.EOF if no more rows can be appended from the
-	// current result set. Return an estimate of row size.
+	// current result set. Return an estimate of row size. If ErrOverflow
+	// is returned, end the current batch immediately. It is assumed the
+	// reader can retry again on the next call.
 	AppendRow(builder *array.RecordBuilder) (int64, error)
 	// BeginAppending is called exactly once before the first call to
 	// AppendRow. The implementation can do any necessary initialization
@@ -170,7 +174,9 @@ func (rr *BaseRecordReader) Next() bool {
 	batchSize := int64(0)
 	for rows < rr.options.BatchRowLimit {
 		size, err := rr.impl.AppendRow(rr.builder)
-		if err == io.EOF {
+		if err == ErrOverflow {
+			break
+		} else if err == io.EOF {
 			// No more rows in this result set, advance to the
 			// next one (if possible, this only happens if we have
 			// bind parameters)
