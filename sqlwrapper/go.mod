@@ -19,7 +19,7 @@ go 1.24.4
 require (
 	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20251112001524-5795cebb37be
 	github.com/apache/arrow-adbc/go/adbc v1.9.0
-	github.com/apache/arrow-go/v18 v18.4.1
+	github.com/apache/arrow-go/v18 v18.4.2-0.20251124222331-4b04248429bc
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546
 )
 
@@ -59,7 +59,7 @@ require (
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/telemetry v0.0.0-20251111211155-bb26e12c2121 // indirect
 	golang.org/x/text v0.31.0 // indirect
-	golang.org/x/tools v0.38.0 // indirect
+	golang.org/x/tools v0.39.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251111163417-95abcf5c77ba // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251111163417-95abcf5c77ba // indirect
