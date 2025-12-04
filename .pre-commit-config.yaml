@@ -19,7 +19,7 @@ repos:
   - id: codespell
 
 - repo: https://github.com/golangci/golangci-lint
-  rev: dc16cf43c85d53f03e00a2f7b93a5e03a1435793  # frozen: v2.6.2
+  rev: e6ebea0145f385056bce15041d3244c0e5e15848  # frozen: v2.7.0
   hooks:
   - id: golangci-lint
     name: lint driverbase
