@@ -18,7 +18,7 @@ go 1.25.5
 
 require (
 	github.com/apache/arrow-adbc/go/adbc v1.9.0
-	github.com/apache/arrow-go/v18 v18.4.2-0.20251124222331-4b04248429bc
+	github.com/apache/arrow-go/v18 v18.5.0-rc0
 	github.com/stretchr/testify v1.11.1
 )
 
