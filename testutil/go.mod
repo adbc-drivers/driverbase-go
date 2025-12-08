@@ -16,7 +16,7 @@ module github.com/adbc-drivers/driverbase-go/testutil
 
 go 1.25.5
 
-require github.com/apache/arrow-go/v18 v18.4.2-0.20251124222331-4b04248429bc
+require github.com/apache/arrow-go/v18 v18.5.0-rc0
 
 require (
 	github.com/goccy/go-json v0.10.5 // indirect
