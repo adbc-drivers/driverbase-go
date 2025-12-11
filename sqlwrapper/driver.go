@@ -51,6 +51,7 @@ type Driver struct {
 	typeConverter     TypeConverter
 	connectionFactory ConnectionFactory
 	dbFactory         DBFactory
+	errorInspector    driverbase.ErrorInspector
 }
 
 // NewDriver creates a new sqlwrapper Driver with driver name, required DBFactory, and optional type converter.
@@ -61,7 +62,8 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory 
 	}
 	info := driverbase.DefaultDriverInfo(vendorName)
 	base := driverbase.NewDriverImplBase(info, alloc)
-	base.ErrorHelper.DriverName = driverName
+	// Use vendorName for error messages (e.g., "MySQL") to match CGO layer capitalization,
+	base.ErrorHelper.DriverName = vendorName
 	return &Driver{
 		DriverImplBase:    base,
 		driverName:        driverName,
@@ -76,6 +78,14 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory 
 // with additional functionality like DbObjectsEnumerator.
 func (d *Driver) WithConnectionFactory(factory ConnectionFactory) *Driver {
 	d.connectionFactory = factory
+	return d
+}
+
+// WithErrorInspector sets a custom error inspector for extracting database error metadata.
+// This allows drivers to map database-specific errors to ADBC status codes and extract
+// SQLSTATE, vendor codes, and other error information.
+func (d *Driver) WithErrorInspector(inspector driverbase.ErrorInspector) *Driver {
+	d.errorInspector = inspector
 	return d
 }
 
@@ -101,18 +111,23 @@ type databaseImpl struct {
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
 	base, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase)
 	if err != nil {
-		return nil, d.ErrorHelper.IO("failed to initialize database base: %v", err)
+		return nil, d.ErrorHelper.WrapIO(err, "failed to initialize database base")
+	}
+
+	// Set error inspector if provided
+	if d.errorInspector != nil {
+		base.ErrorHelper.ErrorInspector = d.errorInspector
 	}
 
 	// Use DB factory to create the *sql.DB from options
 	sqlDB, err := d.dbFactory.CreateDB(ctx, d.driverName, opts)
 	if err != nil {
-		return nil, base.ErrorHelper.InvalidArgument("failed to create database: %v", err)
+		return nil, base.ErrorHelper.WrapInvalidArgument(err, "failed to create database")
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		err = errors.Join(err, sqlDB.Close())
-		return nil, base.ErrorHelper.IO("failed to ping database: %v", err)
+		return nil, base.ErrorHelper.WrapIO(err, "failed to ping database")
 	}
 
 	// Construct and return the ADBC Database wrapper
