@@ -29,19 +29,12 @@ import (
 	"github.com/apache/arrow-adbc/go/adbc"
 )
 
-// ErrorInfo contains extracted information from a database driver error
-type ErrorInfo struct {
-	Status     adbc.Status
-	SqlState   string
-	VendorCode int32
-	Details    []adbc.ErrorDetail
-}
-
-// ErrorInspector inspects database driver errors to extract metadata.
+// ErrorInspector inspects database driver errors and formats them as ADBC errors.
 // Drivers can implement this interface to map database-specific errors to
-// ADBC status codes and extract error details like SQLSTATE and vendor codes.
+// ADBC status codes, format vendor-specific error messages, and extract
+// error details like SQLSTATE and vendor codes.
 type ErrorInspector interface {
-	InspectError(err error, defaultStatus adbc.Status) ErrorInfo
+	InspectError(err error, defaultStatus adbc.Status) adbc.Error
 }
 
 // ErrorHelper helps format errors for ADBC drivers.
@@ -127,32 +120,20 @@ func (helper *ErrorHelper) wrapError(err error, defaultStatus adbc.Status, forma
 
 	contextMsg := fmt.Sprintf(format, args...)
 
-	// Inspect error if driver provided inspect error function that maps database-specific errors to ADBC status codes
-	var info ErrorInfo
+	// Inspect error if driver provided inspector
+	var inspectedErr adbc.Error
 	if helper.ErrorInspector != nil {
-		info = helper.ErrorInspector.InspectError(err, defaultStatus)
+		inspectedErr = helper.ErrorInspector.InspectError(err, defaultStatus)
+	} else {
+		inspectedErr = adbc.Error{
+			Code: defaultStatus,
+			Msg:  err.Error(),
+		}
 	}
 
-	status := info.Status
-	if status == 0 {
-		status = defaultStatus
-	}
+	inspectedErr.Msg = fmt.Sprintf("[%s] %s: %s", helper.DriverName, contextMsg, inspectedErr.Msg)
 
-	msg := fmt.Sprintf("[%s] %s: %v", helper.DriverName, contextMsg, err)
-
-	adbcError := adbc.Error{
-		Code:       status,
-		Msg:        msg,
-		VendorCode: info.VendorCode,
-		Details:    info.Details,
-	}
-
-	// Copy SQLSTATE if available (exactly 5 characters)
-	if len(info.SqlState) >= 5 {
-		copy(adbcError.SqlState[:], info.SqlState[0:5])
-	}
-
-	return errors.Join(adbcError, err)
+	return errors.Join(inspectedErr, err)
 }
 
 func (helper *ErrorHelper) WrapIO(err error, format string, args ...any) error {
