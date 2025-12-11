@@ -91,7 +91,7 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 	// if someone resets the SQL after Prepare, clean up the old stmt
 	if s.stmt != nil {
 		if err := s.stmt.Close(); err != nil {
-			return s.Base().ErrorHelper.IO("failed to close prepared statement: %v", err)
+			return s.Base().ErrorHelper.WrapIO(err, "failed to close prepared statement")
 		}
 		s.stmt = nil
 	}
@@ -197,11 +197,11 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 		res, err = s.conn.ExecContext(ctx, s.query)
 	}
 	if err != nil {
-		return -1, s.Base().ErrorHelper.IO("failed to execute statement: %v", err)
+		return -1, s.Base().ErrorHelper.WrapIO(err, "failed to execute statement")
 	}
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		return rowsAffected, s.Base().ErrorHelper.IO("failed to get rows affected: %v", err)
+		return rowsAffected, s.Base().ErrorHelper.WrapIO(err, "failed to get rows affected")
 	}
 	return rowsAffected, nil
 }
@@ -284,7 +284,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 		options, impl); err != nil {
 		// Clear boundStream on error to prevent double-release in Close()
 		s.boundStream = nil
-		return nil, -1, s.Base().ErrorHelper.IO("failed to create record reader: %v", err)
+		return nil, -1, s.Base().ErrorHelper.WrapIO(err, "failed to create record reader")
 	}
 	s.boundStream = nil
 
@@ -312,7 +312,7 @@ func (s *statementImpl) Close() error {
 	// Close prepared statement
 	if s.stmt != nil {
 		if err := s.stmt.Close(); err != nil {
-			return s.Base().ErrorHelper.IO("failed to close prepared statement: %v", err)
+			return s.Base().ErrorHelper.WrapIO(err, "failed to close prepared statement")
 		}
 	}
 	return nil
@@ -343,14 +343,14 @@ func (s *statementImpl) Prepare(ctx context.Context) (err error) {
 	// Close old statement if it exists
 	if s.stmt != nil {
 		if err = s.stmt.Close(); err != nil {
-			return s.Base().ErrorHelper.IO("failed to close statement: %v", err)
+			return s.Base().ErrorHelper.WrapIO(err, "failed to close statement")
 		}
 		s.stmt = nil
 	}
 
 	s.stmt, err = s.conn.PrepareContext(ctx, s.query)
 	if err != nil {
-		return s.Base().ErrorHelper.IO("failed to prepare statement: %v", err)
+		return s.Base().ErrorHelper.WrapIO(err, "failed to prepare statement")
 	}
 	return nil
 }
@@ -382,7 +382,7 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 	} else {
 		stmt, err = s.conn.PrepareContext(ctx, s.query)
 		if err != nil {
-			return -1, s.Base().ErrorHelper.IO("failed to prepare statement for batch execution: %v", err)
+			return -1, s.Base().ErrorHelper.WrapIO(err, "failed to prepare statement for batch execution")
 		}
 		defer func() {
 			err = errors.Join(err, stmt.Close())
@@ -398,19 +398,19 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 				field := record.Schema().Field(colIdx)
 				value, err := s.typeConverter.ConvertArrowToGo(arr, rowIdx, &field)
 				if err != nil {
-					return totalAffected, s.Base().ErrorHelper.IO("failed to extract parameter value: %v", err)
+					return totalAffected, s.Base().ErrorHelper.WrapIO(err, "failed to extract parameter value")
 				}
 				params[colIdx] = value
 			}
 
 			result, err := stmt.ExecContext(ctx, params...)
 			if err != nil {
-				return totalAffected, s.Base().ErrorHelper.IO("failed to execute statement: %v", err)
+				return totalAffected, s.Base().ErrorHelper.WrapIO(err, "failed to execute statement")
 			}
 
 			affected, err := result.RowsAffected()
 			if err != nil {
-				return totalAffected, s.Base().ErrorHelper.IO("failed to get rows affected: %v", err)
+				return totalAffected, s.Base().ErrorHelper.WrapIO(err, "failed to get rows affected")
 			}
 			totalAffected += affected
 		}
@@ -418,7 +418,7 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 
 	// Check for stream errors
 	if err := s.boundStream.Err(); err != nil {
-		return totalAffected, s.Base().ErrorHelper.IO("stream error during execution: %v", err)
+		return totalAffected, s.Base().ErrorHelper.WrapIO(err, "stream error during execution")
 	}
 
 	return totalAffected, nil

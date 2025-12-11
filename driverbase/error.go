@@ -23,14 +23,24 @@
 package driverbase
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 )
 
+// ErrorInspector inspects database driver errors and formats them as ADBC errors.
+// Drivers can implement this interface to map database-specific errors to
+// ADBC status codes, format vendor-specific error messages, and extract
+// error details like SQLSTATE and vendor codes.
+type ErrorInspector interface {
+	InspectError(err error, defaultStatus adbc.Status) adbc.Error
+}
+
 // ErrorHelper helps format errors for ADBC drivers.
 type ErrorHelper struct {
-	DriverName string
+	DriverName     string
+	ErrorInspector ErrorInspector
 }
 
 func (helper *ErrorHelper) Errorf(code adbc.Status, message string, format ...any) error {
@@ -95,4 +105,89 @@ func (helper *ErrorHelper) Unauthenticated(message string, format ...any) error 
 
 func (helper *ErrorHelper) Unauthorized(message string, format ...any) error {
 	return helper.Errorf(adbc.StatusUnauthorized, message, format...)
+}
+
+// wrapError creates an adbc.Error by inspecting the underlying error.
+func (helper *ErrorHelper) wrapError(err error, defaultStatus adbc.Status, format string, args ...any) error {
+	if err == nil {
+		return nil
+	}
+
+	var adbcErr adbc.Error
+	if errors.As(err, &adbcErr) {
+		return err
+	}
+
+	contextMsg := fmt.Sprintf(format, args...)
+
+	// Inspect error if driver provided inspector
+	var inspectedErr adbc.Error
+	if helper.ErrorInspector != nil {
+		inspectedErr = helper.ErrorInspector.InspectError(err, defaultStatus)
+	} else {
+		inspectedErr = adbc.Error{
+			Code: defaultStatus,
+			Msg:  err.Error(),
+		}
+	}
+
+	inspectedErr.Msg = fmt.Sprintf("[%s] %s: %s", helper.DriverName, contextMsg, inspectedErr.Msg)
+
+	return errors.Join(inspectedErr, err)
+}
+
+func (helper *ErrorHelper) WrapIO(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusIO, format, args...)
+}
+
+func (helper *ErrorHelper) WrapInvalidArgument(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusInvalidArgument, format, args...)
+}
+
+func (helper *ErrorHelper) WrapInvalidState(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusInvalidState, format, args...)
+}
+
+func (helper *ErrorHelper) WrapInvalidData(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusInvalidData, format, args...)
+}
+
+func (helper *ErrorHelper) WrapInternal(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusInternal, format, args...)
+}
+
+func (helper *ErrorHelper) WrapUnauthenticated(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusUnauthenticated, format, args...)
+}
+
+func (helper *ErrorHelper) WrapUnauthorized(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusUnauthorized, format, args...)
+}
+
+func (helper *ErrorHelper) WrapNotFound(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusNotFound, format, args...)
+}
+
+func (helper *ErrorHelper) WrapUnknown(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusUnknown, format, args...)
+}
+
+func (helper *ErrorHelper) WrapAlreadyExists(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusAlreadyExists, format, args...)
+}
+
+func (helper *ErrorHelper) WrapIntegrity(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusIntegrity, format, args...)
+}
+
+func (helper *ErrorHelper) WrapCancelled(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusCancelled, format, args...)
+}
+
+func (helper *ErrorHelper) WrapTimeout(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusTimeout, format, args...)
+}
+
+func (helper *ErrorHelper) WrapNotImplemented(err error, format string, args ...any) error {
+	return helper.wrapError(err, adbc.StatusNotImplemented, format, args...)
 }
