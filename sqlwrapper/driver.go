@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -41,6 +42,13 @@ type ConnectionFactory interface {
 // DSN construction and connection logic for their particular database format.
 type DBFactory interface {
 	CreateDB(ctx context.Context, driverName string, opts map[string]string) (*sql.DB, error)
+}
+
+// DBFactoryWithLogger is an optional interface that DBFactory implementations
+// can implement to receive the database's logger for use during connection creation.
+type DBFactoryWithLogger interface {
+	DBFactory
+	SetLogger(logger *slog.Logger)
 }
 
 // Driver provides an ADBC driver implementation that wraps database/sql drivers.
@@ -117,6 +125,11 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 	// Set error inspector if provided
 	if d.errorInspector != nil {
 		base.ErrorHelper.ErrorInspector = d.errorInspector
+	}
+
+	// If the DBFactory supports logging, provide the database's logger
+	if factoryWithLogger, ok := d.dbFactory.(DBFactoryWithLogger); ok {
+		factoryWithLogger.SetLogger(base.Logger)
 	}
 
 	// Use DB factory to create the *sql.DB from options
