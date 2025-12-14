@@ -27,6 +27,7 @@ package driverbase
 
 import (
 	"context"
+	"log/slog"
 	"runtime/debug"
 	"strings"
 
@@ -65,6 +66,7 @@ type DriverImpl interface {
 // given an input is provided satisfying the DriverImpl interface.
 type Driver interface {
 	adbc.Driver
+	adbc.DatabaseLogging
 }
 
 // DriverImplBase is a struct that provides default implementations of the
@@ -74,6 +76,7 @@ type DriverImplBase struct {
 	Alloc       memory.Allocator
 	ErrorHelper ErrorHelper
 	DriverInfo  *DriverInfo
+	Logger      *slog.Logger
 }
 
 func (base *DriverImplBase) NewDatabase(opts map[string]string) (adbc.Database, error) {
@@ -109,6 +112,7 @@ func NewDriverImplBase(info *DriverInfo, alloc memory.Allocator) DriverImplBase 
 		Alloc:       alloc,
 		ErrorHelper: ErrorHelper{DriverName: info.GetName()},
 		DriverInfo:  info,
+		Logger:      nilLogger(),
 	}
 }
 
@@ -123,6 +127,14 @@ type driver struct {
 // NewDriver wraps a DriverImpl to create a Driver.
 func NewDriver(impl DriverImpl) Driver {
 	return &driver{DriverImpl: impl}
+}
+
+func (d *driver) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		d.Base().Logger = logger
+	} else {
+		d.Base().Logger = nilLogger()
+	}
 }
 
 var _ DriverImpl = (*DriverImplBase)(nil)

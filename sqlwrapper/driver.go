@@ -127,9 +127,9 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 		base.ErrorHelper.ErrorInspector = d.errorInspector
 	}
 
-	// If the DBFactory supports logging, provide the database's logger
+	// If the DBFactory supports logging, provide the driver's logger
 	if factoryWithLogger, ok := d.dbFactory.(DBFactoryWithLogger); ok {
-		factoryWithLogger.SetLogger(base.Logger)
+		factoryWithLogger.SetLogger(d.Logger)
 	}
 
 	// Use DB factory to create the *sql.DB from options
