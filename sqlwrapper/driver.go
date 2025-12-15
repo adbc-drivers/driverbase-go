@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -40,7 +41,7 @@ type ConnectionFactory interface {
 // Each driver is expected to implement this interface to provide database-specific
 // DSN construction and connection logic for their particular database format.
 type DBFactory interface {
-	CreateDB(ctx context.Context, driverName string, opts map[string]string) (*sql.DB, error)
+	CreateDB(ctx context.Context, driverName string, opts map[string]string, logger *slog.Logger) (*sql.DB, error)
 }
 
 // Driver provides an ADBC driver implementation that wraps database/sql drivers.
@@ -120,7 +121,7 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 	}
 
 	// Use DB factory to create the *sql.DB from options
-	sqlDB, err := d.dbFactory.CreateDB(ctx, d.driverName, opts)
+	sqlDB, err := d.dbFactory.CreateDB(ctx, d.driverName, opts, d.Logger)
 	if err != nil {
 		return nil, base.ErrorHelper.WrapInvalidArgument(err, "failed to create database")
 	}

@@ -27,6 +27,7 @@ package driverbase
 
 import (
 	"context"
+	"log/slog"
 	"runtime/debug"
 	"strings"
 
@@ -74,6 +75,7 @@ type DriverImplBase struct {
 	Alloc       memory.Allocator
 	ErrorHelper ErrorHelper
 	DriverInfo  *DriverInfo
+	Logger      *slog.Logger
 }
 
 func (base *DriverImplBase) NewDatabase(opts map[string]string) (adbc.Database, error) {
@@ -109,11 +111,20 @@ func NewDriverImplBase(info *DriverInfo, alloc memory.Allocator) DriverImplBase 
 		Alloc:       alloc,
 		ErrorHelper: ErrorHelper{DriverName: info.GetName()},
 		DriverInfo:  info,
+		Logger:      nilLogger(),
 	}
 }
 
 func (base *DriverImplBase) Base() *DriverImplBase {
 	return base
+}
+
+func (base *DriverImplBase) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		base.Logger = logger
+	} else {
+		base.Logger = nilLogger()
+	}
 }
 
 type driver struct {

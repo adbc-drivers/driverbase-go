@@ -124,7 +124,7 @@ func NewDatabaseImplBase(ctx context.Context, driver *DriverImplBase) (DatabaseI
 		Alloc:       driver.Alloc,
 		ErrorHelper: driver.ErrorHelper,
 		DriverInfo:  driver.DriverInfo,
-		Logger:      nilLogger(),
+		Logger:      driver.Logger,
 		Tracer:      nilTracer(),
 	}
 	err := database.InitTracing(ctx, driver.DriverInfo.GetName(), getDriverVersion(driver.DriverInfo))
