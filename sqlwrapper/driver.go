@@ -41,14 +41,7 @@ type ConnectionFactory interface {
 // Each driver is expected to implement this interface to provide database-specific
 // DSN construction and connection logic for their particular database format.
 type DBFactory interface {
-	CreateDB(ctx context.Context, driverName string, opts map[string]string) (*sql.DB, error)
-}
-
-// DBFactoryWithLogger is an optional interface that DBFactory implementations
-// can implement to receive the database's logger for use during connection creation.
-type DBFactoryWithLogger interface {
-	DBFactory
-	SetLogger(logger *slog.Logger)
+	CreateDB(ctx context.Context, driverName string, opts map[string]string, logger *slog.Logger) (*sql.DB, error)
 }
 
 // Driver provides an ADBC driver implementation that wraps database/sql drivers.
@@ -127,13 +120,8 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 		base.ErrorHelper.ErrorInspector = d.errorInspector
 	}
 
-	// If the DBFactory supports logging, provide the driver's logger
-	if factoryWithLogger, ok := d.dbFactory.(DBFactoryWithLogger); ok {
-		factoryWithLogger.SetLogger(d.Logger)
-	}
-
 	// Use DB factory to create the *sql.DB from options
-	sqlDB, err := d.dbFactory.CreateDB(ctx, d.driverName, opts)
+	sqlDB, err := d.dbFactory.CreateDB(ctx, d.driverName, opts, d.Logger)
 	if err != nil {
 		return nil, base.ErrorHelper.WrapInvalidArgument(err, "failed to create database")
 	}
