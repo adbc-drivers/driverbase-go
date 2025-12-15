@@ -66,7 +66,6 @@ type DriverImpl interface {
 // given an input is provided satisfying the DriverImpl interface.
 type Driver interface {
 	adbc.Driver
-	adbc.DatabaseLogging
 }
 
 // DriverImplBase is a struct that provides default implementations of the
@@ -120,6 +119,14 @@ func (base *DriverImplBase) Base() *DriverImplBase {
 	return base
 }
 
+func (base *DriverImplBase) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		base.Logger = logger
+	} else {
+		base.Logger = nilLogger()
+	}
+}
+
 type driver struct {
 	DriverImpl
 }
@@ -127,14 +134,6 @@ type driver struct {
 // NewDriver wraps a DriverImpl to create a Driver.
 func NewDriver(impl DriverImpl) Driver {
 	return &driver{DriverImpl: impl}
-}
-
-func (d *driver) SetLogger(logger *slog.Logger) {
-	if logger != nil {
-		d.Base().Logger = logger
-	} else {
-		d.Base().Logger = nilLogger()
-	}
 }
 
 var _ DriverImpl = (*DriverImplBase)(nil)
