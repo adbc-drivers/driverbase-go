@@ -406,7 +406,8 @@ func (ins *time32Inserter) AppendValue(sqlValue any) error {
 		ins.builder.AppendNull()
 		return nil
 	}
-	val, err := convertToTime32(unwrapped)
+	timeType := ins.builder.Type().(*arrow.Time32Type)
+	val, err := convertToTime32(unwrapped, timeType.Unit)
 	if err != nil {
 		return err
 	}
@@ -427,7 +428,8 @@ func (ins *time64Inserter) AppendValue(sqlValue any) error {
 		ins.builder.AppendNull()
 		return nil
 	}
-	val, err := convertToTime64(unwrapped)
+	timeType := ins.builder.Type().(*arrow.Time64Type)
+	val, err := convertToTime64(unwrapped, timeType.Unit)
 	if err != nil {
 		return err
 	}
@@ -751,30 +753,42 @@ func parseDateAndConvert(s string) (arrow.Date64, error) {
 }
 
 // convertToTime32 converts a SQL value to arrow.Time32 type
-func convertToTime32(val any) (arrow.Time32, error) {
+func convertToTime32(val any, unit arrow.TimeUnit) (arrow.Time32, error) {
 	switch v := val.(type) {
 	case time.Time:
-		// Convert to time since midnight - assume milliseconds for Time32
-		return arrow.Time32(v.Hour()*3600000 + v.Minute()*60000 + v.Second()*1000 + v.Nanosecond()/1000000), nil
+		switch unit {
+		case arrow.Second:
+			return arrow.Time32(v.Hour()*3600 + v.Minute()*60 + v.Second()), nil
+		case arrow.Millisecond:
+			return arrow.Time32(v.Hour()*3600000 + v.Minute()*60000 + v.Second()*1000 + v.Nanosecond()/1000000), nil
+		default:
+			return 0, fmt.Errorf("unsupported Time32 unit: %v", unit)
+		}
 	case []byte:
-		return arrow.Time32FromString(string(v), arrow.Millisecond)
+		return arrow.Time32FromString(string(v), unit)
 	case string:
-		return arrow.Time32FromString(v, arrow.Millisecond)
+		return arrow.Time32FromString(v, unit)
 	default:
 		return 0, fmt.Errorf("cannot convert %T to Time32, expected time.Time", val)
 	}
 }
 
 // convertToTime64 converts a SQL value to arrow.Time64 type
-func convertToTime64(val any) (arrow.Time64, error) {
+func convertToTime64(val any, unit arrow.TimeUnit) (arrow.Time64, error) {
 	switch v := val.(type) {
 	case time.Time:
-		// Convert to time since midnight - assume microseconds for Time64
-		return arrow.Time64(v.Hour()*3600000000 + v.Minute()*60000000 + v.Second()*1000000 + v.Nanosecond()/1000), nil
+		switch unit {
+		case arrow.Microsecond:
+			return arrow.Time64(v.Hour()*3600000000 + v.Minute()*60000000 + v.Second()*1000000 + v.Nanosecond()/1000), nil
+		case arrow.Nanosecond:
+			return arrow.Time64(v.Hour()*3600000000000 + v.Minute()*60000000000 + v.Second()*1000000000 + v.Nanosecond()), nil
+		default:
+			return 0, fmt.Errorf("unsupported Time64 unit: %v", unit)
+		}
 	case []byte:
-		return arrow.Time64FromString(string(v), arrow.Microsecond)
+		return arrow.Time64FromString(string(v), unit)
 	case string:
-		return arrow.Time64FromString(v, arrow.Microsecond)
+		return arrow.Time64FromString(v, unit)
 	default:
 		return 0, fmt.Errorf("cannot convert %T to Time64, expected time.Time", val)
 	}
