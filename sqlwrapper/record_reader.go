@@ -139,34 +139,34 @@ func (s *sqlRecordReaderImpl) BeginAppending(builder *array.RecordBuilder) error
 	return nil
 }
 
-// AppendRow reads one row from the SQL result set and appends it to the Arrow record builder.
+// AppendRows reads one row from the SQL result set and appends it to the Arrow record builder.
 // Returns io.EOF when no more rows are available in the current result set.
-func (s *sqlRecordReaderImpl) AppendRow(builder *array.RecordBuilder) (int64, error) {
+func (s *sqlRecordReaderImpl) AppendRows(builder *array.RecordBuilder) (int64, int64, error) {
 	// Try to advance to the next row
 	if !s.rows.Next() {
 		// Check for SQL errors first
 		if err := s.rows.Err(); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		// No more rows available
-		return 0, io.EOF
+		return 0, 0, io.EOF
 	}
 
 	// Scan the current row values into our holders
 	if err := s.rows.Scan(s.valuePtrs...); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	// Append each column value using pre-bound inserters
 	// This eliminates ALL type switching - inserters are bound to builders during BeginAppending
 	for i, val := range s.values {
 		if err := s.columnInserters[i].AppendValue(val); err != nil {
-			return 0, fmt.Errorf("failed to append value to column %d: %w", i, err)
+			return 0, 0, fmt.Errorf("failed to append value to column %d: %w", i, err)
 		}
 	}
 
 	// TODO(https://github.com/adbc-drivers/driverbase-go/issues/88): support byte limits in sqlwrapper
-	return 0, nil
+	return 1, 0, nil
 }
 
 // Close closes the underlying SQL rows and releases resources.
