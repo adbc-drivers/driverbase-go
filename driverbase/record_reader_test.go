@@ -62,8 +62,8 @@ type implNoInitialResultSet struct {
 	beganAppending bool
 }
 
-func (s *implNoInitialResultSet) AppendRow(builder *array.RecordBuilder) (int64, error) {
-	return 0, io.EOF
+func (s *implNoInitialResultSet) AppendRows(builder *array.RecordBuilder) (int64, int64, error) {
+	return 0, 0, io.EOF
 }
 func (s *implNoInitialResultSet) BeginAppending(builder *array.RecordBuilder) error {
 	s.beganAppending = true
@@ -105,8 +105,8 @@ type implBeginAppending struct {
 	beganAppending int
 }
 
-func (s *implBeginAppending) AppendRow(builder *array.RecordBuilder) (int64, error) {
-	return 0, io.EOF
+func (s *implBeginAppending) AppendRows(builder *array.RecordBuilder) (int64, int64, error) {
+	return 0, 0, io.EOF
 }
 func (s *implBeginAppending) BeginAppending(builder *array.RecordBuilder) error {
 	s.beganAppending++
@@ -155,13 +155,13 @@ type implNextCallsClose struct {
 	appended int
 }
 
-func (s *implNextCallsClose) AppendRow(builder *array.RecordBuilder) (int64, error) {
+func (s *implNextCallsClose) AppendRows(builder *array.RecordBuilder) (int64, int64, error) {
 	if s.appended < 2 {
 		builder.Field(0).(*array.Int32Builder).Append(1)
 		s.appended++
-		return 1, nil
+		return 1, 1, nil
 	}
-	return 0, io.EOF
+	return 0, 0, io.EOF
 }
 func (s *implNextCallsClose) BeginAppending(builder *array.RecordBuilder) error {
 	return nil
@@ -222,17 +222,17 @@ type implNextResultSetAcrossParams struct {
 	appended  int
 }
 
-func (s *implNextResultSetAcrossParams) AppendRow(builder *array.RecordBuilder) (int64, error) {
+func (s *implNextResultSetAcrossParams) AppendRows(builder *array.RecordBuilder) (int64, int64, error) {
 	if s.resultSet >= 2 && s.resultSet <= 4 {
 		// These result sets are empty
-		return 0, io.EOF
+		return 0, 0, io.EOF
 	}
 	if s.appended < 2 {
 		builder.Field(0).(*array.Int32Builder).Append(1)
 		s.appended++
-		return 1, nil
+		return 1, 1, nil
 	}
-	return 0, io.EOF
+	return 0, 0, io.EOF
 }
 func (s *implNextResultSetAcrossParams) BeginAppending(builder *array.RecordBuilder) error {
 	return nil
@@ -285,18 +285,18 @@ type implNextByteLimit struct {
 	implNextCallsClose
 }
 
-func (s *implNextByteLimit) AppendRow(builder *array.RecordBuilder) (int64, error) {
+func (s *implNextByteLimit) AppendRows(builder *array.RecordBuilder) (int64, int64, error) {
 	if s.appended < 2 {
 		builder.Field(0).(*array.Int32Builder).Append(1)
 		s.appended++
-		return 6, nil
+		return 1, 6, nil
 	}
 	if s.appended < 4 {
 		builder.Field(0).(*array.Int32Builder).Append(1)
 		s.appended++
-		return 20, nil
+		return 1, 20, nil
 	}
-	return 0, io.EOF
+	return 0, 0, io.EOF
 }
 
 func (s *BaseRecordReaderSuite) TestByteLimit() {
@@ -331,16 +331,16 @@ type implOverflow struct {
 	implNextCallsClose
 }
 
-func (s *implOverflow) AppendRow(builder *array.RecordBuilder) (int64, error) {
+func (s *implOverflow) AppendRows(builder *array.RecordBuilder) (int64, int64, error) {
 	s.appended++
 	if s.appended == 2 {
-		return 0, ErrOverflow
+		return 0, 0, ErrOverflow
 	}
 	if s.appended < 5 {
 		builder.Field(0).(*array.Int32Builder).Append(1)
-		return 20, nil
+		return 1, 20, nil
 	}
-	return 0, io.EOF
+	return 0, 0, io.EOF
 }
 
 func (s *BaseRecordReaderSuite) TestOverflow() {

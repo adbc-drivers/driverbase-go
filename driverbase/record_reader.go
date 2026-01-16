@@ -31,12 +31,13 @@ var ErrOverflow = errors.New("driverbase: value overflow")
 // driverbase can pivot this into an array.RecordReader.
 type RecordReaderImpl interface {
 	io.Closer
-	// AppendRow adds a row of the current result set to the record
-	// builder. Return io.EOF if no more rows can be appended from the
-	// current result set. Return an estimate of row size. If ErrOverflow
-	// is returned, end the current batch immediately. It is assumed the
-	// reader can retry again on the next call.
-	AppendRow(builder *array.RecordBuilder) (int64, error)
+	// AppendRows adds one or more rows of the current result set to the
+	// record builder. Return io.EOF if no more rows can be appended from
+	// the current result set. Return the number of rows appended, and an
+	// estimate of row size. If ErrOverflow is returned, end the current
+	// batch immediately. It is assumed the reader can retry again on the
+	// next call.
+	AppendRows(builder *array.RecordBuilder) (int64, int64, error)
 	// BeginAppending is called exactly once before the first call to
 	// AppendRow. The implementation can do any necessary initialization
 	// here. It will be called after the first call to NextResultSet.
@@ -173,7 +174,7 @@ func (rr *BaseRecordReader) Next() bool {
 	rows := int64(0)
 	batchSize := int64(0)
 	for rows < rr.options.BatchRowLimit {
-		size, err := rr.impl.AppendRow(rr.builder)
+		deltaRows, size, err := rr.impl.AppendRows(rr.builder)
 		if err == ErrOverflow {
 			break
 		} else if err == io.EOF {
@@ -206,7 +207,8 @@ func (rr *BaseRecordReader) Next() bool {
 			// TODO: close here?
 			return false
 		}
-		rows++
+		DebugAssert(deltaRows > 0, "AppendRows returned 0 deltaRows without error")
+		rows += deltaRows
 		batchSize += size
 
 		if rr.options.BatchByteLimit > 0 && batchSize >= rr.options.BatchByteLimit {
