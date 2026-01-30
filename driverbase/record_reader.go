@@ -71,6 +71,9 @@ type BaseRecordReader struct {
 	// Current row index into paramRecord
 	paramIndex int
 	done       bool
+
+	keepReading chan bool
+	hasBatch    chan bool
 }
 
 type BaseRecordReaderOptions struct {
@@ -131,7 +134,35 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 	}
 
 	rr.builder = array.NewRecordBuilder(rr.alloc, rr.schema)
-	return rr.impl.BeginAppending(rr.builder)
+	if err = rr.impl.BeginAppending(rr.builder); err != nil {
+		return err
+	}
+
+	// PERF: when built as a shared library, it turns out there's a
+	// performance footgun. When C code calls into the Go shared library,
+	// Go will lock the goroutine to that thread. If AppendRows then
+	// spawns goroutines, they can't run on the existing thread, so they
+	// need to invoke the scheduler. If AppendRows spawns a lot of
+	// goroutines, this thrashes the scheduler, and we start seeing a lot
+	// of overhead there, causing us to lose performance. To guard against
+	// that, we put the bulk of the work onto a background goroutine and
+	// have Next talk to it via channels.
+	keepReading := make(chan bool)
+	hasBatch := make(chan bool)
+	rr.keepReading = keepReading
+	rr.hasBatch = hasBatch
+	go func() {
+		defer close(hasBatch)
+		for <-keepReading {
+			next := rr.readBatch()
+			hasBatch <- next
+			if !next {
+				break
+			}
+		}
+	}()
+
+	return nil
 }
 
 func (rr *BaseRecordReader) Close() {
@@ -142,6 +173,10 @@ func (rr *BaseRecordReader) Close() {
 	if rr.builder != nil {
 		rr.builder.Release()
 		rr.builder = nil
+	}
+	if rr.keepReading != nil {
+		close(rr.keepReading)
+		rr.keepReading = nil
 	}
 	if rr.impl != nil {
 		if err := rr.impl.Close(); err != nil {
@@ -158,19 +193,7 @@ func (rr *BaseRecordReader) Close() {
 	}
 }
 
-func (rr *BaseRecordReader) Next() bool {
-	if rr.impl == nil || rr.err != nil {
-		return false
-	}
-	if rr.nextBatch != nil {
-		rr.nextBatch.Release()
-		rr.nextBatch = nil
-	}
-	if rr.done {
-		rr.Close()
-		return false
-	}
-
+func (rr *BaseRecordReader) readBatch() bool {
 	rows := int64(0)
 	batchSize := int64(0)
 	for rows < rr.options.BatchRowLimit {
@@ -222,6 +245,24 @@ func (rr *BaseRecordReader) Next() bool {
 		rr.Close()
 	}
 	return rows > 0
+}
+
+func (rr *BaseRecordReader) Next() bool {
+	if rr.impl == nil || rr.err != nil {
+		return false
+	}
+	if rr.nextBatch != nil {
+		rr.nextBatch.Release()
+		rr.nextBatch = nil
+	}
+	if rr.done {
+		rr.Close()
+		return false
+	}
+
+	rr.keepReading <- true
+	hasBatch := <-rr.hasBatch
+	return hasBatch
 }
 
 // advanceParams gets the next row of bind parameters, or returns false if no
