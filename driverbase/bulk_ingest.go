@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -30,6 +31,17 @@ import (
 	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	// OptionKeyIngestBatchSize controls rows per INSERT during batched bulk ingest
+	// Value of 0 means driver default applies.
+	OptionKeyIngestBatchSize = "adbc.statement.ingest.batch_size"
+
+	// OptionKeyIngestMaxPayloadSize controls maximum query payload size in bytes for batched bulk ingest
+	// When set, rows are added to a batch until the payload size reaches this limit.
+	// Value of 0 means driver default applies.
+	OptionKeyIngestMaxPayloadSize = "adbc.statement.ingest.max_payload_size"
 )
 
 // WriterProps holds properties for writing data files to be ingested.
@@ -60,6 +72,10 @@ type BulkIngestOptions struct {
 	// How many buffers to queue at once
 	MaxPendingBuffers int
 	WriterProps       WriterProps
+	// IngestBatchSize controls rows per INSERT during batched ingestion (0 means driver default)
+	IngestBatchSize int
+	// MaxPayloadSize controls maximum query payload size in bytes (0 means driver default)
+	MaxPayloadSize int
 }
 
 func NewBulkIngestOptions() BulkIngestOptions {
@@ -110,6 +126,34 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 		default:
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid statement option %s=%s", key, val)
 		}
+	case OptionKeyIngestBatchSize:
+		if options.MaxPayloadSize > 0 {
+			return true, eh.Errorf(adbc.StatusInvalidArgument,
+				"cannot set both %s and %s - they are mutually exclusive",
+				OptionKeyIngestBatchSize, OptionKeyIngestMaxPayloadSize)
+		}
+		size, err := strconv.Atoi(val)
+		if err != nil {
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid ingest batch size: %v", err)
+		}
+		if size < 0 {
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "ingest batch size must be non-negative, got %d", size)
+		}
+		options.IngestBatchSize = size
+	case OptionKeyIngestMaxPayloadSize:
+		if options.IngestBatchSize > 0 {
+			return true, eh.Errorf(adbc.StatusInvalidArgument,
+				"cannot set both %s and %s - they are mutually exclusive",
+				OptionKeyIngestMaxPayloadSize, OptionKeyIngestBatchSize)
+		}
+		size, err := strconv.Atoi(val)
+		if err != nil {
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid max payload size: %v", err)
+		}
+		if size < 0 {
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "max payload size must be non-negative, got %d", size)
+		}
+		options.MaxPayloadSize = size
 	default:
 		return false, nil
 	}
