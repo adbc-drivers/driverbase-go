@@ -36,9 +36,11 @@ type BulkIngester interface {
 	// QuoteIdentifier quotes a table/column identifier for SQL
 	QuoteIdentifier(name string) string
 
-	// GetPlaceholder returns the SQL placeholder for a field
-	// Examples: "?" for MySQL/Trino, "$1" for PostgreSQL, "CAST(? AS REAL)" for special types
-	GetPlaceholder(field *arrow.Field) string
+	// GetPlaceholder returns the SQL placeholder for a field at the given parameter index (0-based)
+	// Examples: "?" for MySQL/Trino, "$1" for PostgreSQL (index+1), "CAST(? AS REAL)" for special types
+	// For databases using positional placeholders (e.g., PostgreSQL $1, $2, ...), the index indicates
+	// the parameter position in the overall statement
+	GetPlaceholder(field *arrow.Field, index int) string
 }
 
 // Custom option keys for the sqlwrapper
@@ -469,7 +471,7 @@ func ExecuteBatchedBulkIngest(
 	typeConverter TypeConverter,
 	ingester BulkIngester,
 	errorHelper *driverbase.ErrorHelper,
-) (int64, error) {
+) (totalRowsInserted int64, err error) {
 	if stream == nil {
 		return -1, errorHelper.InvalidArgument("stream cannot be nil")
 	}
@@ -479,84 +481,67 @@ func ExecuteBatchedBulkIngest(
 		batchSize = 1000
 	}
 
-	var totalRowsInserted int64
 	schema := stream.Schema()
-
-	placeholders := make([]string, len(schema.Fields()))
-	for i, field := range schema.Fields() {
-		placeholders[i] = ingester.GetPlaceholder(&field)
+	numCols := len(schema.Fields())
+	if numCols == 0 {
+		return 0, errorHelper.InvalidArgument("stream has no columns")
 	}
 
-	numCols := len(schema.Fields())
 	quotedTableName := ingester.QuoteIdentifier(options.TableName)
 
-	for stream.Next() {
-		recordBatch := stream.RecordBatch()
-		totalRows := int(recordBatch.NumRows())
+	iterator, err := NewRowBufferIterator(stream, batchSize, typeConverter)
+	if err != nil {
+		return -1, errorHelper.WrapIO(err, "failed to create row buffer iterator")
+	}
+	defer iterator.Close()
 
-		// Split into batches
-		for startRow := 0; startRow < totalRows; startRow += batchSize {
-			endRow := min(startRow+batchSize, totalRows)
-			currentBatchSize := endRow - startRow
+	insertSQL := buildMultiRowInsertSQL(quotedTableName, schema, batchSize, ingester)
+	stmt, err := conn.PrepareContext(ctx, insertSQL)
+	if err != nil {
+		return -1, errorHelper.WrapIO(err, "failed to prepare batch insert statement")
+	}
+	defer func() {
+		err = errors.Join(err, stmt.Close())
+	}()
 
-			// Convert Arrow to Go
-			batchParams := make([]any, currentBatchSize*numCols)
-			paramIdx := 0
-			for rowOffset := range currentBatchSize {
-				rowIdx := startRow + rowOffset
-				for colIdx := range numCols {
-					arr := recordBatch.Column(colIdx)
-					field := schema.Field(colIdx)
+	for iterator.Next() {
+		buffer, rowCount := iterator.CurrentBatch()
 
-					value, err := typeConverter.ConvertArrowToGo(arr, rowIdx, &field)
-					if err != nil {
-						return totalRowsInserted, errorHelper.WrapIO(err,
-							"failed to convert value at row %d, col %d (%s)",
-							rowIdx, colIdx, field.Name)
-					}
-					batchParams[paramIdx] = value
-					paramIdx++
-				}
+		if rowCount == batchSize {
+			// Full batch: use pre-prepared statement
+			_, execErr := stmt.ExecContext(ctx, buffer...)
+			if execErr != nil {
+				return totalRowsInserted, errorHelper.WrapIO(execErr,
+					"failed to execute batch insert (inserted so far: %d)", totalRowsInserted)
 			}
-
-			// Execute with converted params
-			rowsInserted, err := ExecuteSingleBatch(
-				ctx, conn, quotedTableName,
-				placeholders, currentBatchSize, batchParams,
-				errorHelper,
-			)
-			if err != nil {
-				return totalRowsInserted, errorHelper.WrapIO(err,
-					"failed to insert batch at rows %d-%d (inserted so far: %d)",
-					startRow, endRow-1, totalRowsInserted)
+			totalRowsInserted += int64(rowCount)
+		} else {
+			// Partial batch at end: handle with multi-row insertion
+			partialInserted, partialErr := executePartialBatch(
+				ctx, conn, quotedTableName, schema,
+				buffer, rowCount, ingester, errorHelper)
+			if partialErr != nil {
+				return totalRowsInserted, partialErr
 			}
-			totalRowsInserted += rowsInserted
+			totalRowsInserted += partialInserted
 		}
 	}
 
-	if err := stream.Err(); err != nil {
-		return totalRowsInserted, errorHelper.WrapIO(err, "stream error")
+	// Check for iteration errors
+	if iterErr := iterator.Err(); iterErr != nil {
+		return totalRowsInserted, errorHelper.WrapIO(iterErr, "stream error during iteration")
 	}
 
 	return totalRowsInserted, nil
 }
 
-// ExecuteSingleBatch inserts a batch of rows using a single multi-row INSERT.
-// This function is exported so database-specific drivers can use it for custom batching logic.
-// The params must already be converted from Arrow to Go values by the caller.
-func ExecuteSingleBatch(
-	ctx context.Context,
-	conn *LoggingConn,
-	quotedTableName string,
-	placeholders []string,
-	batchSize int,
-	params []any,
-	errorHelper *driverbase.ErrorHelper,
-) (rows int64, err error) {
+// buildMultiRowInsertSQL constructs an INSERT statement with placeholders for a fixed number of rows.
+func buildMultiRowInsertSQL(quotedTableName string, schema *arrow.Schema, batchSize int, ingester BulkIngester) string {
 	var queryBuilder strings.Builder
+	numCols := len(schema.Fields())
 
 	// Estimate capacity: "INSERT INTO table VALUES " + batchSize * "(?, ?, ?), "
-	singleRowLen := 1 + len(placeholders)*2 + 2 // "(" + placeholders with ", " + ")"
+	singleRowLen := 1 + numCols*4 + 2 // "(" + placeholders (estimate 4 chars each) + ")"
 	estimatedSize := 20 + len(quotedTableName) + 8 + (batchSize * (singleRowLen + 2))
 	queryBuilder.Grow(estimatedSize)
 
@@ -564,35 +549,54 @@ func ExecuteSingleBatch(
 	queryBuilder.WriteString(quotedTableName)
 	queryBuilder.WriteString(" VALUES ")
 
-	// Build multi-row VALUES: (?, ?), (?, ?), ...
+	// Build multi-row VALUES with proper parameter indices
 	for row := range batchSize {
 		if row > 0 {
-			queryBuilder.WriteString(", ")
+			queryBuilder.WriteString(",")
 		}
 		queryBuilder.WriteString("(")
-		for col, placeholder := range placeholders {
+		for col := range numCols {
 			if col > 0 {
-				queryBuilder.WriteString(", ")
+				queryBuilder.WriteString(",")
 			}
+			field := schema.Field(col)
+			paramIndex := row*numCols + col
+			placeholder := ingester.GetPlaceholder(&field, paramIndex)
 			queryBuilder.WriteString(placeholder)
 		}
 		queryBuilder.WriteString(")")
 	}
 
-	insertSQL := queryBuilder.String()
+	return queryBuilder.String()
+}
 
+// executePartialBatch handles insertion of leftover rows that don't fill a complete batch.
+// Builds a multi-row INSERT statement for the exact partial batch size.
+func executePartialBatch(
+	ctx context.Context,
+	conn *LoggingConn,
+	quotedTableName string,
+	schema *arrow.Schema,
+	buffer []any,
+	rowCount int,
+	ingester BulkIngester,
+	errorHelper *driverbase.ErrorHelper,
+) (int64, error) {
+	insertSQL := buildMultiRowInsertSQL(quotedTableName, schema, rowCount, ingester)
 	stmt, err := conn.PrepareContext(ctx, insertSQL)
 	if err != nil {
-		return 0, errorHelper.WrapIO(err, "failed to prepare batch insert")
+		return 0, errorHelper.WrapIO(err, "failed to prepare partial batch insert")
 	}
 	defer func() {
-		err = errors.Join(err, stmt.Close())
+		if closeErr := stmt.Close(); closeErr != nil {
+			err = errors.Join(err, errorHelper.WrapIO(closeErr, "failed to close statement"))
+		}
 	}()
 
-	_, err = stmt.ExecContext(ctx, params...)
-	if err != nil {
-		return 0, errorHelper.WrapIO(err, "failed to execute batch insert")
+	_, execErr := stmt.ExecContext(ctx, buffer...)
+	if execErr != nil {
+		return 0, errorHelper.WrapIO(execErr, "failed to insert partial batch (%d rows)", rowCount)
 	}
 
-	return int64(batchSize), nil
+	return int64(rowCount), nil
 }
