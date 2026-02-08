@@ -38,10 +38,10 @@ const (
 	// Value of 0 means driver default applies.
 	OptionKeyIngestBatchSize = "adbc.statement.ingest.batch_size"
 
-	// OptionKeyIngestMaxQuerySize controls maximum SQL query size in bytes for batched bulk ingest
+	// OptionKeyIngestMaxQuerySizeBytes controls maximum SQL query size in bytes for batched bulk ingest
 	// When set, the batch size is calculated to keep the generated INSERT query under this limit.
 	// Value of 0 means driver default applies.
-	OptionKeyIngestMaxQuerySize = "adbc.statement.ingest.max_query_size"
+	OptionKeyIngestMaxQuerySizeBytes = "adbc.statement.ingest.max_query_size_bytes"
 )
 
 // WriterProps holds properties for writing data files to be ingested.
@@ -74,8 +74,8 @@ type BulkIngestOptions struct {
 	WriterProps       WriterProps
 	// IngestBatchSize controls rows per INSERT during batched ingestion (0 means driver default)
 	IngestBatchSize int
-	// MaxQuerySize controls maximum SQL query size in bytes (0 means driver default)
-	MaxQuerySize int
+	// MaxQuerySizeBytes controls maximum SQL query size in bytes (0 means driver default)
+	MaxQuerySizeBytes int
 }
 
 func NewBulkIngestOptions() BulkIngestOptions {
@@ -127,10 +127,10 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid statement option %s=%s", key, val)
 		}
 	case OptionKeyIngestBatchSize:
-		if options.MaxQuerySize > 0 {
+		if options.MaxQuerySizeBytes > 0 {
 			return true, eh.Errorf(adbc.StatusInvalidArgument,
 				"cannot set both %s and %s - they are mutually exclusive",
-				OptionKeyIngestBatchSize, OptionKeyIngestMaxQuerySize)
+				OptionKeyIngestBatchSize, OptionKeyIngestMaxQuerySizeBytes)
 		}
 		size, err := strconv.Atoi(val)
 		if err != nil {
@@ -140,11 +140,11 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "ingest batch size must be non-negative, got %d", size)
 		}
 		options.IngestBatchSize = size
-	case OptionKeyIngestMaxQuerySize:
+	case OptionKeyIngestMaxQuerySizeBytes:
 		if options.IngestBatchSize > 0 {
 			return true, eh.Errorf(adbc.StatusInvalidArgument,
 				"cannot set both %s and %s - they are mutually exclusive",
-				OptionKeyIngestMaxQuerySize, OptionKeyIngestBatchSize)
+				OptionKeyIngestMaxQuerySizeBytes, OptionKeyIngestBatchSize)
 		}
 		size, err := strconv.Atoi(val)
 		if err != nil {
@@ -153,7 +153,7 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 		if size < 0 {
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "max query size must be non-negative, got %d", size)
 		}
-		options.MaxQuerySize = size
+		options.MaxQuerySizeBytes = size
 	default:
 		return false, nil
 	}
