@@ -19,7 +19,7 @@ repos:
   - id: codespell
 
 - repo: https://github.com/golangci/golangci-lint
-  rev: e6ebea0145f385056bce15041d3244c0e5e15848  # frozen: v2.7.0
+  rev: 72798d34b1eb36745915b0d4eea5c2b3b31bdfe3  # frozen: v2.9.0
   hooks:
   - id: golangci-lint
     name: lint driverbase
@@ -66,6 +66,6 @@ repos:
   - id: trailing-whitespace
 
 - repo: https://github.com/adbc-drivers/dev
-  rev: 8ba235d79417939cf59e94ab85204731f7cbb9ba
+  rev: 03bf2427d2f60555ff1950c28bfa9369130ef15f
   hooks:
   - id: rat

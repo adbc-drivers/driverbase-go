@@ -27,6 +27,8 @@ import (
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/compute"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
@@ -50,16 +52,18 @@ type WriterProps struct {
 	MaxBytes           int64
 	ParquetWriterProps *parquet.WriterProperties
 	ArrowWriterProps   pqarrow.ArrowWriterProperties
+	ArrowIpcProps      []ipc.Option
 }
 
+// Common options for bulk ingestion.
 type BulkIngestOptions struct {
 	// The table to ingest data into.
 	TableName   string
 	SchemaName  string
 	CatalogName string
-	// If true, use a temporary table.  The catalog/schema, if specified,
-	// will be ignored (as temporary tables generally get implemented via
-	// a special catalog/schema).
+	// If true, use a temporary table.  The catalog/schema, if specified, will likely
+	// be ignored (as temporary tables generally get implemented via a special
+	// catalog/schema).
 	Temporary bool
 	// The ingest mode.
 	Mode string
@@ -71,7 +75,8 @@ type BulkIngestOptions struct {
 	UploaderParallelism int
 	// How many buffers to queue at once
 	MaxPendingBuffers int
-	WriterProps       WriterProps
+	// Format-specific options.
+	WriterProps WriterProps
 	// IngestBatchSize controls rows per INSERT during batched ingestion (0 means driver default)
 	IngestBatchSize int
 	// MaxQuerySizeBytes controls maximum SQL query size in bytes (0 means driver default)
@@ -90,6 +95,7 @@ func NewBulkIngestOptions() BulkIngestOptions {
 			MaxBytes:           10 * 1024 * 1024, // 10MiB
 			ParquetWriterProps: parquet.NewWriterProperties(),
 			ArrowWriterProps:   pqarrow.NewArrowWriterProperties(),
+			ArrowIpcProps:      []ipc.Option{ipc.WithZstd()},
 		},
 	}
 }
@@ -168,6 +174,7 @@ func (options *BulkIngestOptions) Clear() {
 	options.Mode = adbc.OptionValueIngestModeCreate
 }
 
+// What a driver should do when creating the target table, if the table exists.
 type BulkIngestTableExistsBehavior int
 
 const (
@@ -176,6 +183,7 @@ const (
 	BulkIngestTableExistsDrop
 )
 
+// What a driver should do when creating the target table, if the table does not exist.
 type BulkIngestTableMissingBehavior int
 
 const (
@@ -190,28 +198,83 @@ type BulkIngestSink interface {
 	Sink() io.Writer
 }
 
-// BulkIngestPendingUpload is a set of rows serialized to Parquet, ready to be
-// uploaded or written to the staging area.
+// BulkIngestPendingUpload is a set of serialized rows, ready to be uploaded or written to
+// the staging area.
 type BulkIngestPendingUpload struct {
 	Data BulkIngestSink
 	Rows int64
+}
+
+func (bpu *BulkIngestPendingUpload) String() string {
+	return fmt.Sprintf("<in-memory buffer (%d rows)>", bpu.Rows)
+}
+
+func (bpu *BulkIngestPendingUpload) NumRows() int64 {
+	return bpu.Rows
 }
 
 // BulkIngestPendingCopy is a file that was uploaded to the staging area and
 // is ready to be copied into the target table.
 type BulkIngestPendingCopy interface {
 	fmt.Stringer
-	Rows() int64
+	NumRows() int64
 }
 
+var _ BulkIngestPendingCopy = (*BulkIngestPendingUpload)(nil)
+
+// BulkIngestImpl is driver-specific behavior for bulk ingest, under the assumption that
+// the target database accepts a stream of serialized data (which may be Arrow, Parquet,
+// or something else).
 type BulkIngestImpl interface {
-	Copy(ctx context.Context, chunk BulkIngestPendingCopy) error
-	CreateSink(ctx context.Context, options *BulkIngestOptions) (BulkIngestSink, error)
+	// CreateTable is the first step, and should create the table to ingest into.
 	CreateTable(ctx context.Context, schema *arrow.Schema, ifTableExists BulkIngestTableExistsBehavior, ifTableMissing BulkIngestTableMissingBehavior) error
-	Delete(ctx context.Context, chunk BulkIngestPendingCopy) error
-	Upload(ctx context.Context, chunk BulkIngestPendingUpload) (BulkIngestPendingCopy, error)
+	// CreateSink is called repeatedly to allocate a sink to write serialized data
+	// into, if needed. Return BufferBulkIngestSink to use an in-memory staging area.
+	CreateSink(ctx context.Context, options *BulkIngestOptions) (BulkIngestSink, error)
+	// Serialize writes Arrow data into the sink, pulling from the stream of
+	// batches. Returns (rows, bytes) written.
+	Serialize(ctx context.Context, writerProps *WriterProps, schema *arrow.Schema, batches chan arrow.RecordBatch, sink BulkIngestSink) (int64, int64, error)
+	// Copy actually uploads the given serialized data into the target table.
+	Copy(ctx context.Context, chunk BulkIngestPendingCopy) error
 }
 
+// BulkIngestInitFinalizeImpl is an optional interface to implement in addition to
+// BulkIngestImpl for drivers to perform setup/teardown.
+type BulkIngestInitFinalizeImpl interface {
+	// Init is called prior to any other methods.
+	Init(ctx context.Context) error
+	// Finalize ends the bulk ingest. It is always called.
+	Finalize(ctx context.Context, success bool) error
+}
+
+// BulkIngestFileImpl is an optional interface to implement in addition to BulkIngestImpl
+// for drivers to add an additional upload-to-staging-area step.  For example, the target
+// database may only be able to ingest data from Parquet files on S3; this interface gives
+// the driver a chance to upload the serialized files, and then delete them.
+type BulkIngestFileImpl interface {
+	// Upload serialized data to the staging area, if needed.
+	Upload(ctx context.Context, chunk BulkIngestPendingUpload) (BulkIngestPendingCopy, error)
+	// Delete serialized data from the staging area, if needed.
+	Delete(ctx context.Context, chunk BulkIngestPendingCopy) error
+}
+
+// Optionally implement this if the data has to be transformed (e.g. cast view types to
+// 'normal' types).  The benefit of using this interface is that the transformation can be
+// parallelized (vs just transforming the input stream).
+type BulkIngestTransformImpl interface {
+	TransformedSchema() *arrow.Schema
+	TransformBatch(ctx context.Context, batch arrow.RecordBatch) (arrow.RecordBatch, error)
+}
+
+// ParquetIngestImpl is a base for BulkIngestImpl that writes Parquet data.
+type ParquetIngestImpl struct{}
+
+func (p *ParquetIngestImpl) Serialize(ctx context.Context, writerProps *WriterProps, schema *arrow.Schema, batches chan arrow.RecordBatch, sink BulkIngestSink) (int64, int64, error) {
+	return writeParquetForIngestion(writerProps, schema, batches, sink.Sink())
+}
+
+// BulkIngestManager actually implements bulk ingest given an implementation of
+// BulkIngestImpl and other interfaces.
 type BulkIngestManager struct {
 	Impl        BulkIngestImpl
 	ErrorHelper *ErrorHelper
@@ -222,7 +285,8 @@ type BulkIngestManager struct {
 	Data        array.RecordReader
 
 	// Internal state
-	batches chan arrow.RecordBatch
+	batches            chan arrow.RecordBatch
+	transformedBatches chan arrow.RecordBatch
 }
 
 func (bi *BulkIngestManager) Close() {
@@ -236,9 +300,18 @@ func (bi *BulkIngestManager) Close() {
 		}
 		bi.batches = nil
 	}
+	if bi.transformedBatches != nil {
+		for record := range bi.transformedBatches {
+			record.Release()
+		}
+		bi.transformedBatches = nil
+	}
 }
 
+// Init checks preconditions.  This must be called before ExecuteIngest.
 func (bi *BulkIngestManager) Init() error {
+	bi.Ctx = compute.WithAllocator(bi.Ctx, bi.Alloc)
+	bi.Options.WriterProps.ArrowIpcProps = append(bi.Options.WriterProps.ArrowIpcProps, ipc.WithAllocator(bi.Alloc))
 	if bi.Options.TableName == "" {
 		return bi.ErrorHelper.InvalidState("must set %s to ingest data", adbc.OptionKeyIngestTargetTable)
 	} else if bi.Data == nil {
@@ -254,8 +327,24 @@ func (bi *BulkIngestManager) Init() error {
 	return nil
 }
 
+// ExecuteIngest actually uploads data.
 func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 	schema := bi.Data.Schema()
+
+	initFinal, needsInit := bi.Impl.(BulkIngestInitFinalizeImpl)
+
+	if needsInit {
+		if err := initFinal.Init(bi.Ctx); err != nil {
+			return -1, errors.Join(err, initFinal.Finalize(bi.Ctx, false))
+		}
+	}
+
+	t, needsTransform := bi.Impl.(BulkIngestTransformImpl)
+	if needsTransform {
+		schema = t.TransformedSchema()
+	}
+
+	fileImpl, needsUpload := bi.Impl.(BulkIngestFileImpl)
 
 	// Create the table if needed.
 	var ifTableExists BulkIngestTableExistsBehavior
@@ -276,15 +365,19 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 	}
 	err := bi.Impl.CreateTable(bi.Ctx, schema, ifTableExists, ifTableMissing)
 	if err != nil {
+		if needsInit {
+			return -1, errors.Join(err, initFinal.Finalize(bi.Ctx, false))
+		}
 		return -1, err
 	}
+
+	// From this point on: no early returns; at least spawn all goroutines.
 
 	// Set up the ingest pipeline.
 	g, cancelCtx := errgroup.WithContext(bi.Ctx)
 
-	// Drain the bind parameters into a channel, chunking data appropriately.  (The
-	// final data size after being serialized to Parquet will vary based on
-	// compression/encoding ratios.)
+	// Drain the bind parameters into a channel, chunking data.  (The final data size
+	// will vary based on compression/encoding ratios.)
 	bi.batches = make(chan arrow.RecordBatch, bi.Options.ReadDepth)
 	g.Go(func() error {
 		defer close(bi.batches)
@@ -308,10 +401,47 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 		return err
 	})
 
-	// Take the records from the channel and write Parquet to files/in-memory buffers.
+	if needsTransform {
+		bi.transformedBatches = make(chan arrow.RecordBatch, bi.Options.ReadDepth+1)
+		g.Go(func() error {
+			defer close(bi.transformedBatches)
+		loop:
+			for {
+				select {
+				case <-cancelCtx.Done():
+					return nil
+				case batch := <-bi.batches:
+					if batch == nil {
+						break loop
+					}
+					transformed, err := t.TransformBatch(cancelCtx, batch)
+					batch.Release()
+					if err != nil {
+						return err
+					}
+					bi.transformedBatches <- transformed
+				}
+			}
+
+			bi.Logger.Debug("drained source", "err", err)
+			return nil
+		})
+	}
+
+	// Take the records from the channel and write serialized data to files/in-memory buffers.
 	pendingBuffers := make(chan BulkIngestPendingUpload, bi.Options.MaxPendingBuffers)
+	pendingFiles := make(chan BulkIngestPendingCopy, bi.Options.MaxPendingBuffers)
 	g.Go(func() error {
 		defer close(pendingBuffers)
+		if !needsUpload {
+			defer close(pendingFiles)
+		}
+
+		batches := bi.batches
+		if needsTransform {
+			batches = bi.transformedBatches
+		}
+
 		writers, innerCtx := errgroup.WithContext(cancelCtx)
 		for range bi.Options.WriterParallelism {
 			writers.Go(func() error {
@@ -327,7 +457,7 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 						return err
 					}
 
-					rows, bytes, err := writeParquetForIngestion(&bi.Options.WriterProps, schema, bi.batches, sink.Sink())
+					rows, bytes, err := bi.Impl.Serialize(innerCtx, &bi.Options.WriterProps, schema, batches, sink)
 					// TODO(lidavidm): in these cases, don't we still need to delete the file?
 					if err != nil {
 						return errors.Join(err, sink.Close())
@@ -337,9 +467,16 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 					}
 
 					bi.Logger.Debug("created buffer", "table", bi.Options.TableName, "rows", rows, "bytes", bytes)
-					pendingBuffers <- BulkIngestPendingUpload{
-						Data: sink,
-						Rows: rows,
+					if needsUpload {
+						pendingBuffers <- BulkIngestPendingUpload{
+							Data: sink,
+							Rows: rows,
+						}
+					} else {
+						pendingFiles <- &BulkIngestPendingUpload{
+							Data: sink,
+							Rows: rows,
+						}
 					}
 				}
 				return nil
@@ -351,40 +488,41 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 	})
 
 	// Take the buffers and upload them (if necessary)
-	pendingFiles := make(chan BulkIngestPendingCopy, bi.Options.MaxPendingBuffers)
-	g.Go(func() error {
-		defer close(pendingFiles)
+	if needsUpload {
+		g.Go(func() error {
+			defer close(pendingFiles)
 
-		uploaders, innerCtx := errgroup.WithContext(cancelCtx)
-		for range bi.Options.UploaderParallelism {
-			uploaders.Go(func() (err error) {
-				for pendingBuffer := range pendingBuffers {
-					defer func() {
-						err = errors.Join(err, pendingBuffer.Data.Close())
-					}()
+			uploaders, innerCtx := errgroup.WithContext(cancelCtx)
+			for range bi.Options.UploaderParallelism {
+				uploaders.Go(func() (err error) {
+					for pendingBuffer := range pendingBuffers {
+						defer func() {
+							err = errors.Join(err, pendingBuffer.Data.Close())
+						}()
 
-					select {
-					case <-innerCtx.Done():
-						bi.Logger.Debug("operation canceled", "table", bi.Options.TableName)
-						return nil
-					default:
+						select {
+						case <-innerCtx.Done():
+							bi.Logger.Debug("operation canceled", "table", bi.Options.TableName)
+							return nil
+						default:
+						}
+
+						uploaded, err := fileImpl.Upload(bi.Ctx, pendingBuffer)
+						if err != nil {
+							return err
+						}
+
+						pendingFiles <- uploaded
+						bi.Logger.Debug("uploaded file", "table", bi.Options.TableName, "dest", uploaded.String(), "rows", pendingBuffer.Rows)
 					}
-
-					uploaded, err := bi.Impl.Upload(bi.Ctx, pendingBuffer)
-					if err != nil {
-						return err
-					}
-
-					pendingFiles <- uploaded
-					bi.Logger.Debug("uploaded file", "table", bi.Options.TableName, "dest", uploaded.String(), "rows", pendingBuffer.Rows)
-				}
-				return nil
-			})
-		}
-		err := uploaders.Wait()
-		bi.Logger.Debug("uploaded all files", "err", err)
-		return err
-	})
+					return nil
+				})
+			}
+			err := uploaders.Wait()
+			bi.Logger.Debug("uploaded all files", "err", err)
+			return err
+		})
+	}
 
 	// Take uploaded files and copy them into the remote system.
 	var rowsWritten atomic.Int64
@@ -392,55 +530,74 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 	g.Go(func() error {
 		defer close(recycleBin)
 		defer func() {
-			for pendingFile := range pendingFiles {
-				recycleBin <- pendingFile
+			if needsUpload {
+				for pendingFile := range pendingFiles {
+					recycleBin <- pendingFile
+				}
 			}
 		}()
 		for pendingFile := range pendingFiles {
 			select {
 			case <-cancelCtx.Done():
-				recycleBin <- pendingFile
+				if needsUpload {
+					recycleBin <- pendingFile
+				}
 				return nil
 			default:
 			}
 
 			err := bi.Impl.Copy(bi.Ctx, pendingFile)
 			if err != nil {
-				recycleBin <- pendingFile
+				if needsUpload {
+					recycleBin <- pendingFile
+				}
 				bi.Logger.Debug("failed to ingest file", "uri", pendingFile, "err", err)
 				return err
 			}
 
-			rowsWritten.Add(pendingFile.Rows())
-			bi.Logger.Debug("ingested file", "table", bi.Options.TableName, "uri", pendingFile, "rows", pendingFile.Rows())
-			recycleBin <- pendingFile
+			rowsWritten.Add(pendingFile.NumRows())
+			bi.Logger.Debug("ingested file", "table", bi.Options.TableName, "uri", pendingFile, "rows", pendingFile.NumRows())
+			if needsUpload {
+				recycleBin <- pendingFile
+			}
 		}
 		bi.Logger.Debug("ingested all files")
 		return nil
 	})
 
 	// Take uploaded files and delete them.
-	g.Go(func() error {
-		var res error
-		for pendingFile := range recycleBin {
-			bi.Logger.Debug("cleaning up file", "table", bi.Options.TableName, "uri", pendingFile)
+	if needsUpload {
+		g.Go(func() error {
+			var res error
+			for pendingFile := range recycleBin {
+				bi.Logger.Debug("cleaning up file", "table", bi.Options.TableName, "uri", pendingFile)
 
-			err := bi.Impl.Delete(bi.Ctx, pendingFile)
-			if err != nil {
-				// Only save the first error, but log all errors
-				if res == nil {
-					res = err
+				err := fileImpl.Delete(bi.Ctx, pendingFile)
+				if err != nil {
+					// Only save the first error, but log all errors
+					if res == nil {
+						res = err
+					}
+					bi.Logger.Warn("failed to clean up file", "table", bi.Options.TableName, "uri", pendingFile, "err", err)
+				} else {
+					bi.Logger.Debug("cleaned up file", "table", bi.Options.TableName, "uri", pendingFile, "err", err)
 				}
-				bi.Logger.Warn("failed to clean up file", "table", bi.Options.TableName, "uri", pendingFile, "err", err)
-			} else {
-				bi.Logger.Debug("cleaned up file", "table", bi.Options.TableName, "uri", pendingFile, "err", err)
 			}
-		}
-		bi.Logger.Debug("deleted files", "err", res)
-		return res
-	})
+			bi.Logger.Debug("deleted files", "err", res)
+			return res
+		})
+	}
 
 	err = g.Wait()
+
+	if needsInit {
+		// N.B. we always call finalize, even on error!
+		if finalErr := initFinal.Finalize(bi.Ctx, err == nil); err != nil {
+			bi.Logger.Error("failed to finalize bulk ingest", "err", finalErr)
+			err = errors.Join(err, finalErr)
+		}
+	}
+
 	bi.Logger.Debug("completed ingest", "err", err)
 	return rowsWritten.Load(), err
 }
@@ -486,6 +643,7 @@ func writeParquetForIngestion(writerProps *WriterProps, schema *arrow.Schema, ba
 	return rows, w.RowGroupTotalCompressedBytes(), nil
 }
 
+// BufferBulkIngestSink is an in-memory BulkIngestSink.
 type BufferBulkIngestSink struct {
 	bytes.Buffer
 }
