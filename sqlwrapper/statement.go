@@ -508,12 +508,16 @@ func ExecuteBatchedBulkIngest(
 
 		if rowCount == batchSize {
 			// Full batch: use pre-prepared statement
-			_, execErr := stmt.ExecContext(ctx, buffer...)
+			result, execErr := stmt.ExecContext(ctx, buffer...)
 			if execErr != nil {
 				return totalRowsInserted, errorHelper.WrapIO(execErr,
 					"failed to execute batch insert (inserted so far: %d)", totalRowsInserted)
 			}
-			totalRowsInserted += int64(rowCount)
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				return totalRowsInserted, errorHelper.WrapIO(err, "failed to get rows affected")
+			}
+			totalRowsInserted += rowsAffected
 		} else {
 			// Partial batch at end: handle with multi-row insertion
 			partialInserted, partialErr := ExecutePartialBatch(
@@ -580,22 +584,24 @@ func ExecutePartialBatch(
 	rowCount int,
 	ingester BulkIngester,
 	errorHelper *driverbase.ErrorHelper,
-) (int64, error) {
+) (rowsInserted int64, err error) {
 	insertSQL := buildMultiRowInsertSQL(quotedTableName, schema, rowCount, ingester)
 	stmt, err := conn.PrepareContext(ctx, insertSQL)
 	if err != nil {
 		return 0, errorHelper.WrapIO(err, "failed to prepare partial batch insert")
 	}
 	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			err = errors.Join(err, errorHelper.WrapIO(closeErr, "failed to close statement"))
-		}
+		err = errors.Join(err, stmt.Close())
 	}()
 
-	_, execErr := stmt.ExecContext(ctx, buffer...)
+	result, execErr := stmt.ExecContext(ctx, buffer...)
 	if execErr != nil {
 		return 0, errorHelper.WrapIO(execErr, "failed to insert partial batch (%d rows)", rowCount)
 	}
 
-	return int64(rowCount), nil
+	rowsInserted, err = result.RowsAffected()
+	if err != nil {
+		err = errorHelper.WrapIO(err, "failed to get rows affected")
+	}
+	return
 }

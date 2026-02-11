@@ -15,9 +15,9 @@
 package sqlwrapper
 
 import (
-	"fmt"
 	"testing"
 
+	"github.com/adbc-drivers/driverbase-go/testutil"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -83,18 +83,13 @@ func TestRowBufferIteratorSingleBatch(t *testing.T) {
 	}, nil)
 
 	// Create a single Arrow batch with 5 rows
-	builder := array.NewRecordBuilder(mem, schema)
-	defer builder.Release()
-
-	int32Builder := builder.Field(0).(*array.Int32Builder)
-	stringBuilder := builder.Field(1).(*array.StringBuilder)
-
-	for i := range 5 {
-		int32Builder.Append(int32(i))
-		stringBuilder.Append("value" + string(rune('0'+i)))
-	}
-
-	rec := builder.NewRecordBatch()
+	rec := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 0, "string": "value0"},
+		{"int32": 1, "string": "value1"},
+		{"int32": 2, "string": "value2"},
+		{"int32": 3, "string": "value3"},
+		{"int32": 4, "string": "value4"}
+	]`)
 	defer rec.Release()
 
 	reader, err := array.NewRecordReader(schema, []arrow.RecordBatch{rec})
@@ -130,29 +125,31 @@ func TestRowBufferIteratorCrossBatchBoundary(t *testing.T) {
 	}, nil)
 
 	// Create 3 Arrow batches with 4 rows each (total 12 rows)
-	var batches []arrow.RecordBatch
-	for batchIdx := range 3 {
-		builder := array.NewRecordBuilder(mem, schema)
-		int32Builder := builder.Field(0).(*array.Int32Builder)
-		stringBuilder := builder.Field(1).(*array.StringBuilder)
+	batch1 := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 0, "string": "str0"},
+		{"int32": 1, "string": "str1"},
+		{"int32": 2, "string": "str2"},
+		{"int32": 3, "string": "str3"}
+	]`)
+	defer batch1.Release()
 
-		for i := range 4 {
-			val := batchIdx*4 + i
-			int32Builder.Append(int32(val))
-			stringBuilder.Append(fmt.Sprintf("str%d", val))
-		}
+	batch2 := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 4, "string": "str4"},
+		{"int32": 5, "string": "str5"},
+		{"int32": 6, "string": "str6"},
+		{"int32": 7, "string": "str7"}
+	]`)
+	defer batch2.Release()
 
-		rec := builder.NewRecordBatch()
-		batches = append(batches, rec)
-		builder.Release()
-	}
-	defer func() {
-		for _, rec := range batches {
-			rec.Release()
-		}
-	}()
+	batch3 := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 8, "string": "str8"},
+		{"int32": 9, "string": "str9"},
+		{"int32": 10, "string": "str10"},
+		{"int32": 11, "string": "str11"}
+	]`)
+	defer batch3.Release()
 
-	reader, err := array.NewRecordReader(schema, batches)
+	reader, err := array.NewRecordReader(schema, []arrow.RecordBatch{batch1, batch2, batch3})
 	require.NoError(t, err)
 	defer reader.Release()
 
@@ -219,33 +216,37 @@ func TestRowBufferIteratorUnevenBatches(t *testing.T) {
 	}, nil)
 
 	// Create Arrow batches with UNEVEN row counts: 3, 5, 2, 4 (total 14 rows)
-	batchSizes := []int{3, 5, 2, 4}
-	var batches []arrow.RecordBatch
-	rowCounter := 0
+	batch1 := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 0, "string": "row0"},
+		{"int32": 1, "string": "row1"},
+		{"int32": 2, "string": "row2"}
+	]`)
+	defer batch1.Release()
 
-	for _, size := range batchSizes {
-		builder := array.NewRecordBuilder(mem, schema)
-		int32Builder := builder.Field(0).(*array.Int32Builder)
-		stringBuilder := builder.Field(1).(*array.StringBuilder)
+	batch2 := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 3, "string": "row3"},
+		{"int32": 4, "string": "row4"},
+		{"int32": 5, "string": "row5"},
+		{"int32": 6, "string": "row6"},
+		{"int32": 7, "string": "row7"}
+	]`)
+	defer batch2.Release()
 
-		for i := range size {
-			val := rowCounter + i
-			int32Builder.Append(int32(val))
-			stringBuilder.Append(fmt.Sprintf("row%d", val))
-		}
+	batch3 := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 8, "string": "row8"},
+		{"int32": 9, "string": "row9"}
+	]`)
+	defer batch3.Release()
 
-		rec := builder.NewRecordBatch()
-		batches = append(batches, rec)
-		builder.Release()
-		rowCounter += size
-	}
-	defer func() {
-		for _, rec := range batches {
-			rec.Release()
-		}
-	}()
+	batch4 := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 10, "string": "row10"},
+		{"int32": 11, "string": "row11"},
+		{"int32": 12, "string": "row12"},
+		{"int32": 13, "string": "row13"}
+	]`)
+	defer batch4.Release()
 
-	reader, err := array.NewRecordReader(schema, batches)
+	reader, err := array.NewRecordReader(schema, []arrow.RecordBatch{batch1, batch2, batch3, batch4})
 	require.NoError(t, err)
 	defer reader.Release()
 
@@ -302,6 +303,89 @@ func TestRowBufferIteratorUnevenBatches(t *testing.T) {
 	assert.Equal(t, "row12", buffer[5])
 	assert.Equal(t, int32(13), buffer[6])
 	assert.Equal(t, "row13", buffer[7])
+
+	// No more batches
+	assert.False(t, iter.Next())
+	assert.NoError(t, iter.Err())
+}
+
+func TestRowBufferIteratorSplitLargeBatch(t *testing.T) {
+	mem := memory.NewGoAllocator()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "int32", Type: arrow.PrimitiveTypes.Int32},
+		{Name: "string", Type: arrow.BinaryTypes.String},
+	}, nil)
+
+	// Create a single large Arrow batch with 12 rows
+	rec := testutil.RecordFromJSON(t, mem, schema, `[
+		{"int32": 0, "string": "val0"},
+		{"int32": 1, "string": "val1"},
+		{"int32": 2, "string": "val2"},
+		{"int32": 3, "string": "val3"},
+		{"int32": 4, "string": "val4"},
+		{"int32": 5, "string": "val5"},
+		{"int32": 6, "string": "val6"},
+		{"int32": 7, "string": "val7"},
+		{"int32": 8, "string": "val8"},
+		{"int32": 9, "string": "val9"},
+		{"int32": 10, "string": "val10"},
+		{"int32": 11, "string": "val11"}
+	]`)
+	defer rec.Release()
+
+	reader, err := array.NewRecordReader(schema, []arrow.RecordBatch{rec})
+	require.NoError(t, err)
+	defer reader.Release()
+
+	// SQL batch size of 5, Arrow batch has 12 rows
+	// Should split into: [5 rows], [5 rows], [2 rows]
+	iter, err := NewRowBufferIterator(reader, 5, DefaultTypeConverter{})
+	require.NoError(t, err)
+
+	// First SQL batch: 5 rows
+	assert.True(t, iter.Next())
+	buffer, rowCount := iter.CurrentBatch()
+	assert.Equal(t, 5, rowCount)
+	assert.Len(t, buffer, 10) // 5 rows * 2 columns
+
+	assert.Equal(t, int32(0), buffer[0])
+	assert.Equal(t, "val0", buffer[1])
+	assert.Equal(t, int32(1), buffer[2])
+	assert.Equal(t, "val1", buffer[3])
+	assert.Equal(t, int32(2), buffer[4])
+	assert.Equal(t, "val2", buffer[5])
+	assert.Equal(t, int32(3), buffer[6])
+	assert.Equal(t, "val3", buffer[7])
+	assert.Equal(t, int32(4), buffer[8])
+	assert.Equal(t, "val4", buffer[9])
+
+	// Second SQL batch: 5 rows
+	assert.True(t, iter.Next())
+	buffer, rowCount = iter.CurrentBatch()
+	assert.Equal(t, 5, rowCount)
+	assert.Len(t, buffer, 10) // 5 rows * 2 columns
+
+	assert.Equal(t, int32(5), buffer[0])
+	assert.Equal(t, "val5", buffer[1])
+	assert.Equal(t, int32(6), buffer[2])
+	assert.Equal(t, "val6", buffer[3])
+	assert.Equal(t, int32(7), buffer[4])
+	assert.Equal(t, "val7", buffer[5])
+	assert.Equal(t, int32(8), buffer[6])
+	assert.Equal(t, "val8", buffer[7])
+	assert.Equal(t, int32(9), buffer[8])
+	assert.Equal(t, "val9", buffer[9])
+
+	// Third SQL batch: 2 rows
+	assert.True(t, iter.Next())
+	buffer, rowCount = iter.CurrentBatch()
+	assert.Equal(t, 2, rowCount)
+	assert.Len(t, buffer, 4) // 2 rows * 2 columns
+
+	assert.Equal(t, int32(10), buffer[0])
+	assert.Equal(t, "val10", buffer[1])
+	assert.Equal(t, int32(11), buffer[2])
+	assert.Equal(t, "val11", buffer[3])
 
 	// No more batches
 	assert.False(t, iter.Next())
