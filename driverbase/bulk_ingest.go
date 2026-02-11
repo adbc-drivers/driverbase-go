@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -32,6 +33,17 @@ import (
 	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	// OptionKeyIngestBatchSize controls rows per INSERT during batched bulk ingest
+	// Value of 0 means driver default applies.
+	OptionKeyIngestBatchSize = "adbc.statement.ingest.batch_size"
+
+	// OptionKeyIngestMaxQuerySizeBytes controls maximum SQL query size in bytes for batched bulk ingest
+	// When set, the batch size is calculated to keep the generated INSERT query under this limit.
+	// Value of 0 means driver default applies.
+	OptionKeyIngestMaxQuerySizeBytes = "adbc.statement.ingest.max_query_size_bytes"
 )
 
 // WriterProps holds properties for writing data files to be ingested.
@@ -65,6 +77,10 @@ type BulkIngestOptions struct {
 	MaxPendingBuffers int
 	// Format-specific options.
 	WriterProps WriterProps
+	// IngestBatchSize controls rows per INSERT during batched ingestion (0 means driver default)
+	IngestBatchSize int
+	// MaxQuerySizeBytes controls maximum SQL query size in bytes (0 means driver default)
+	MaxQuerySizeBytes int
 }
 
 func NewBulkIngestOptions() BulkIngestOptions {
@@ -116,6 +132,28 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 		default:
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid statement option %s=%s", key, val)
 		}
+	case OptionKeyIngestBatchSize:
+		size, err := strconv.Atoi(val)
+		if err != nil {
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid ingest batch size: %v", err)
+		}
+		if size < 0 {
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "ingest batch size must be non-negative, got %d", size)
+		}
+		// These options are mutually exclusive - zero out the other
+		options.MaxQuerySizeBytes = 0
+		options.IngestBatchSize = size
+	case OptionKeyIngestMaxQuerySizeBytes:
+		size, err := strconv.Atoi(val)
+		if err != nil {
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid max query size: %v", err)
+		}
+		if size < 0 {
+			return true, eh.Errorf(adbc.StatusInvalidArgument, "max query size must be non-negative, got %d", size)
+		}
+		// These options are mutually exclusive - zero out the other
+		options.IngestBatchSize = 0
+		options.MaxQuerySizeBytes = size
 	default:
 		return false, nil
 	}

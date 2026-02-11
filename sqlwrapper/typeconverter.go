@@ -15,6 +15,7 @@
 package sqlwrapper
 
 import (
+	"bytes"
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
@@ -1069,23 +1070,23 @@ func (d DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index int
 	case *array.Boolean:
 		return a.Value(index), nil
 
-	// String types
+	// String types - deep copy to avoid referencing Arrow buffer
 	case *array.String:
-		return a.Value(index), nil
+		return strings.Clone(a.Value(index)), nil
 	case *array.LargeString:
-		return a.Value(index), nil
+		return strings.Clone(a.Value(index)), nil
 	case *array.StringView:
-		return a.Value(index), nil
+		return strings.Clone(a.Value(index)), nil
 
-	// Binary types
+	// Binary types - deep copy to avoid referencing Arrow buffer
 	case *array.Binary:
-		return a.Value(index), nil
+		return bytes.Clone(a.Value(index)), nil
 	case *array.BinaryView:
-		return a.Value(index), nil
+		return bytes.Clone(a.Value(index)), nil
 	case *array.FixedSizeBinary:
-		return a.Value(index), nil
+		return bytes.Clone(a.Value(index)), nil
 	case *array.LargeBinary:
-		return a.Value(index), nil
+		return bytes.Clone(a.Value(index)), nil
 
 	// Date/Time types -  use Arrow's built-in ToTime() methods
 	case *array.Date32:
