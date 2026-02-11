@@ -569,7 +569,7 @@ func buildMultiRowInsertSQL(quotedTableName string, schema *arrow.Schema, batchS
 	return queryBuilder.String()
 }
 
-// ExecuteDynamicBatch executes a multi-row INSERT with a dynamic number of rows.
+// ExecutePartialBatch executes a multi-row INSERT with a dynamic number of rows.
 // Builds a multi-row INSERT statement for the exact batch size and executes with parameters.
 func ExecutePartialBatch(
 	ctx context.Context,
