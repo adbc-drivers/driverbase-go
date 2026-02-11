@@ -127,11 +127,6 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid statement option %s=%s", key, val)
 		}
 	case OptionKeyIngestBatchSize:
-		if options.MaxQuerySizeBytes > 0 {
-			return true, eh.Errorf(adbc.StatusInvalidArgument,
-				"cannot set both %s and %s - they are mutually exclusive",
-				OptionKeyIngestBatchSize, OptionKeyIngestMaxQuerySizeBytes)
-		}
 		size, err := strconv.Atoi(val)
 		if err != nil {
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid ingest batch size: %v", err)
@@ -139,13 +134,10 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 		if size < 0 {
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "ingest batch size must be non-negative, got %d", size)
 		}
+		// These options are mutually exclusive - zero out the other
+		options.MaxQuerySizeBytes = 0
 		options.IngestBatchSize = size
 	case OptionKeyIngestMaxQuerySizeBytes:
-		if options.IngestBatchSize > 0 {
-			return true, eh.Errorf(adbc.StatusInvalidArgument,
-				"cannot set both %s and %s - they are mutually exclusive",
-				OptionKeyIngestMaxQuerySizeBytes, OptionKeyIngestBatchSize)
-		}
 		size, err := strconv.Atoi(val)
 		if err != nil {
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "invalid max query size: %v", err)
@@ -153,6 +145,8 @@ func (options *BulkIngestOptions) SetOption(eh *ErrorHelper, key, val string) (b
 		if size < 0 {
 			return true, eh.Errorf(adbc.StatusInvalidArgument, "max query size must be non-negative, got %d", size)
 		}
+		// These options are mutually exclusive - zero out the other
+		options.IngestBatchSize = 0
 		options.MaxQuerySizeBytes = size
 	default:
 		return false, nil

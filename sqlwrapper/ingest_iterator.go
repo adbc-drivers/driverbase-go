@@ -24,17 +24,16 @@ import (
 // RowBufferIterator accumulates rows from an Arrow RecordReader into fixed-size
 // batches of Go values, crossing Arrow batch boundaries transparently.
 type RowBufferIterator struct {
-	reader          array.RecordReader
-	typeConverter   TypeConverter
-	batchSize       int                 // Target SQL batch size (from options.IngestBatchSize)
-	numCols         int                 // Number of columns in schema
-	buffer          []any               // Pre-allocated buffer: [batchSize * numCols]
-	currentSize     int                 // Number of rows currently in buffer (0 to batchSize)
-	currentBatch    arrow.RecordBatch   // Current Arrow batch being processed
-	currentRow      int                 // Next row to read from currentBatch
-	retainedBatches []arrow.RecordBatch // Batches retained for current SQL batch
-	done            bool                // True when stream is exhausted
-	err             error               // First error encountered
+	reader        array.RecordReader
+	typeConverter TypeConverter
+	batchSize     int               // Target SQL batch size (from options.IngestBatchSize)
+	numCols       int               // Number of columns in schema
+	buffer        []any             // Pre-allocated buffer: [batchSize * numCols]
+	currentSize   int               // Number of rows currently in buffer (0 to batchSize)
+	currentBatch  arrow.RecordBatch // Current Arrow batch being processed
+	currentRow    int               // Next row to read from currentBatch
+	done          bool              // True when stream is exhausted
+	err           error             // First error encountered
 }
 
 // NewRowBufferIterator creates a new iterator that accumulates rows into fixed-size batches.
@@ -60,17 +59,16 @@ func NewRowBufferIterator(
 	numCols := len(reader.Schema().Fields())
 
 	return &RowBufferIterator{
-		reader:          reader,
-		typeConverter:   typeConverter,
-		batchSize:       batchSize,
-		numCols:         numCols,
-		buffer:          make([]any, batchSize*numCols),
-		currentSize:     0,
-		currentBatch:    nil,
-		currentRow:      0,
-		retainedBatches: make([]arrow.RecordBatch, 0, 4),
-		done:            false,
-		err:             nil,
+		reader:        reader,
+		typeConverter: typeConverter,
+		batchSize:     batchSize,
+		numCols:       numCols,
+		buffer:        make([]any, batchSize*numCols),
+		currentSize:   0,
+		currentBatch:  nil,
+		currentRow:    0,
+		done:          false,
+		err:           nil,
 	}, nil
 }
 
@@ -85,16 +83,6 @@ func (it *RowBufferIterator) Next() bool {
 	it.currentSize = 0
 	schema := it.reader.Schema()
 
-	// Build new list of batches we'll use in this iteration
-	newRetainedBatches := make([]arrow.RecordBatch, 0, cap(it.retainedBatches))
-	newRetainedSet := make(map[arrow.RecordBatch]bool)
-	alreadyRetained := make(map[arrow.RecordBatch]bool)
-
-	// Mark batches from previous iteration as "already retained"
-	for _, batch := range it.retainedBatches {
-		alreadyRetained[batch] = true
-	}
-
 	// Accumulate rows until buffer is full
 	for it.currentSize < it.batchSize {
 		if it.currentBatch == nil || it.currentRow >= int(it.currentBatch.NumRows()) {
@@ -108,15 +96,6 @@ func (it *RowBufferIterator) Next() bool {
 		rowsAvailable := int(it.currentBatch.NumRows()) - it.currentRow
 		rowsNeeded := it.batchSize - it.currentSize
 		rowsToCopy := min(rowsAvailable, rowsNeeded)
-
-		// Track this batch for the new retained list
-		if !newRetainedSet[it.currentBatch] {
-			if !alreadyRetained[it.currentBatch] {
-				it.currentBatch.Retain()
-			}
-			newRetainedBatches = append(newRetainedBatches, it.currentBatch)
-			newRetainedSet[it.currentBatch] = true
-		}
 
 		for colIdx := range it.numCols {
 			arr := it.currentBatch.Column(colIdx)
@@ -141,16 +120,6 @@ func (it *RowBufferIterator) Next() bool {
 		it.currentSize += rowsToCopy
 		it.currentRow += rowsToCopy
 	}
-
-	// Release batches from previous iteration that we're no longer using
-	for _, batch := range it.retainedBatches {
-		if !newRetainedSet[batch] {
-			batch.Release()
-		}
-	}
-
-	// Update retained batches list for next iteration
-	it.retainedBatches = newRetainedBatches
 
 	// Return true if we have any data (even partial batch at end)
 	return it.currentSize > 0
@@ -191,15 +160,4 @@ func (it *RowBufferIterator) CurrentBatch() (buffer []any, rowCount int) {
 // Should be called after Next() returns false.
 func (it *RowBufferIterator) Err() error {
 	return it.err
-}
-
-// Close releases any retained Arrow batches. This should be called if iteration
-// is aborted before completion, or to explicitly release resources.
-// Note: Next() automatically releases batches from the previous iteration,
-// so Close() is only needed for cleanup in error cases.
-func (it *RowBufferIterator) Close() {
-	for _, batch := range it.retainedBatches {
-		batch.Release()
-	}
-	it.retainedBatches = nil
 }

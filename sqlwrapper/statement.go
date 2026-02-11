@@ -493,7 +493,6 @@ func ExecuteBatchedBulkIngest(
 	if err != nil {
 		return -1, errorHelper.WrapIO(err, "failed to create row buffer iterator")
 	}
-	defer iterator.Close()
 
 	insertSQL := buildMultiRowInsertSQL(quotedTableName, schema, batchSize, ingester)
 	stmt, err := conn.PrepareContext(ctx, insertSQL)
@@ -517,7 +516,7 @@ func ExecuteBatchedBulkIngest(
 			totalRowsInserted += int64(rowCount)
 		} else {
 			// Partial batch at end: handle with multi-row insertion
-			partialInserted, partialErr := executePartialBatch(
+			partialInserted, partialErr := ExecutePartialBatch(
 				ctx, conn, quotedTableName, schema,
 				buffer, rowCount, ingester, errorHelper)
 			if partialErr != nil {
@@ -570,9 +569,9 @@ func buildMultiRowInsertSQL(quotedTableName string, schema *arrow.Schema, batchS
 	return queryBuilder.String()
 }
 
-// executePartialBatch handles insertion of leftover rows that don't fill a complete batch.
-// Builds a multi-row INSERT statement for the exact partial batch size.
-func executePartialBatch(
+// ExecuteDynamicBatch executes a multi-row INSERT with a dynamic number of rows.
+// Builds a multi-row INSERT statement for the exact batch size and executes with parameters.
+func ExecutePartialBatch(
 	ctx context.Context,
 	conn *LoggingConn,
 	quotedTableName string,
