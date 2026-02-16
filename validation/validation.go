@@ -1332,7 +1332,7 @@ func (s *StatementTests) TestSqlIngestErrors() {
 		var e adbc.Error
 		_, err = stmt.ExecuteUpdate(s.ctx)
 		s.ErrorAs(err, &e)
-		s.Equal(adbc.StatusInternal, e.Code)
+		s.Equal(adbc.StatusAlreadyExists, e.Code)
 
 		// try to append an incompatible schema
 		schema, _ = schema.AddField(1, arrow.Field{Name: "coltwo", Type: arrow.PrimitiveTypes.Int64, Nullable: true})
