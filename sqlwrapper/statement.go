@@ -113,7 +113,7 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 	}
 
 	// Setting a SQL query switches out of bulk ingest mode
-	s.bulkIngestOptions = driverbase.NewBulkIngestOptions()
+	s.bulkIngestOptions.Clear()
 
 	s.query = query
 	return nil
