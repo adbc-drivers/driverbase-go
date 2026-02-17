@@ -1295,7 +1295,7 @@ func (s *StatementTests) TestSqlIngestErrors() {
 		s.Require().NoError(stmt.Bind(s.ctx, batch))
 
 		var e adbc.Error
-		_, _, err := stmt.ExecuteQuery(s.ctx)
+		_,  err := stmt.ExecuteUpdate(s.ctx)
 		s.ErrorAs(err, &e)
 		s.NotEqual(adbc.StatusOK, e.Code)
 		// SQLSTATE 42S02 == table or view not found
