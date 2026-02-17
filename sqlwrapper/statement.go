@@ -112,6 +112,9 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 		s.boundStream = nil
 	}
 
+	// Setting a SQL query switches out of bulk ingest mode
+	s.bulkIngestOptions = driverbase.NewBulkIngestOptions()
+
 	s.query = query
 	return nil
 }
@@ -263,6 +266,11 @@ func (c closer) Close() error {
 
 // ExecuteQuery runs a SELECT and returns a RecordReader for streaming Arrow records
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordReader, rowCount int64, err error) {
+	if s.bulkIngestOptions.IsSet() {
+		rowCount, err = s.executeBulkIngest(ctx)
+		return
+	}
+
 	if s.query == "" {
 		return nil, -1, s.Base().ErrorHelper.InvalidState("no query set")
 	}
@@ -438,7 +446,7 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
 	// Check for proper bulk ingest setup
 	if s.boundStream == nil {
-		return -1, s.Base().ErrorHelper.InvalidArgument("bulk ingest options are set but no stream is bound - call BindStream() first")
+		return -1, s.Base().ErrorHelper.InvalidState("bulk ingest options are set but no stream is bound - call BindStream() first")
 	}
 
 	// Type-assert to the BulkIngester interface for database-specific implementations
