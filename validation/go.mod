@@ -14,7 +14,7 @@
 
 module github.com/adbc-drivers/driverbase-go/validation
 
-go 1.25.5
+go 1.26.0
 
 require (
 	github.com/apache/arrow-adbc/go/adbc v1.10.0
