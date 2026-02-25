@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -49,6 +50,14 @@ type RecordReaderImpl interface {
 	NextResultSet(ctx context.Context, rec arrow.RecordBatch, rowIdx int) (*arrow.Schema, error)
 }
 
+type SynchronousCancel interface {
+	// Cancel is called to cancel the current query. Note that other
+	// methods may be called after, but Cancel will not be called
+	// concurrently with other methods. If possible an implementation
+	// should handle context cancellation itself.
+	Cancel()
+}
+
 // BaseRecordReader is an array.RecordReader based on a row-wise interface.
 // It manages ADBC requirements like re-issuing queries multiple times for
 // each row of a bind parameter set.
@@ -56,6 +65,7 @@ type BaseRecordReader struct {
 	refCount int64
 	ctx      context.Context
 	alloc    memory.Allocator
+	logger   *slog.Logger
 	// bind parameters or nil
 	params  array.RecordReader
 	options BaseRecordReaderOptions
@@ -73,7 +83,7 @@ type BaseRecordReader struct {
 	paramIndex int
 	done       bool
 
-	keepReading chan bool
+	keepReading chan struct{}
 	hasBatch    chan bool
 	// concurrent usage is not actually allowed, but try to prevent weird
 	// things from happening
@@ -95,13 +105,15 @@ func (options *BaseRecordReaderOptions) validate() error {
 }
 
 // Init initializes the state for the record reader.
-func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, params array.RecordReader, options BaseRecordReaderOptions, impl RecordReaderImpl) (err error) {
+func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, logger *slog.Logger, params array.RecordReader, options BaseRecordReaderOptions, impl RecordReaderImpl) (err error) {
 	rr.refCount = 1
 
 	if ctx == nil {
 		return errors.New("driverbase: BaseRecordReader: must provide ctx")
 	} else if alloc == nil {
 		return errors.New("driverbase: BaseRecordReader: must provide alloc")
+	} else if logger == nil {
+		return errors.New("driverbase: BaseRecordReader: must provide logger")
 	} else if impl == nil {
 		return errors.New("driverbase: BaseRecordReader: must provide impl")
 	} else if err := options.validate(); err != nil {
@@ -110,6 +122,7 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 
 	rr.ctx = ctx
 	rr.alloc = alloc
+	rr.logger = logger
 	rr.params = params
 	rr.options = options
 	rr.impl = impl
@@ -151,17 +164,32 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, pa
 	// of overhead there, causing us to lose performance. To guard against
 	// that, we put the bulk of the work onto a background goroutine and
 	// have Next talk to it via channels.
-	keepReading := make(chan bool)
+	keepReading := make(chan struct{}, 1)
 	hasBatch := make(chan bool)
 	rr.keepReading = keepReading
 	rr.hasBatch = hasBatch
 	go func() {
 		defer close(hasBatch)
-		for <-keepReading {
-			next := rr.readBatch()
-			hasBatch <- next
-			if !next {
-				break
+		for {
+			select {
+			case _, ok := <-keepReading:
+				if !ok {
+					return
+				}
+
+				next := rr.readBatch()
+				hasBatch <- next
+				if !next {
+					return
+				}
+			case <-ctx.Done():
+				if c, ok := rr.impl.(SynchronousCancel); ok {
+					rr.logger.Debug("BaseRecordReader: cancel", "error", ctx.Err())
+					c.Cancel()
+				} else {
+					rr.logger.Debug("BaseRecordReader: cancel (not implemented)", "error", ctx.Err())
+				}
+				return
 			}
 		}
 	}()
@@ -276,7 +304,7 @@ func (rr *BaseRecordReader) Next() bool {
 		return false
 	}
 
-	rr.keepReading <- true
+	rr.keepReading <- struct{}{}
 	hasBatch := <-rr.hasBatch
 	return hasBatch
 }

@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/adbc-drivers/driverbase-go/testutil"
@@ -36,11 +38,13 @@ type BaseRecordReaderSuite struct {
 	suite.Suite
 	ctx context.Context
 	mem *memory.CheckedAllocator
+	log *slog.Logger
 }
 
 func (s *BaseRecordReaderSuite) SetupTest() {
 	s.ctx = context.Background()
 	s.mem = memory.NewCheckedAllocator(memory.NewGoAllocator())
+	s.log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 func (s *BaseRecordReaderSuite) TearDownTest() {
@@ -53,9 +57,10 @@ func (s *BaseRecordReaderSuite) TestInitErrors() {
 	// staticcheck tries to make the nil context here non-nil, but we're intentionally
 	// testing a nil context.
 	// nolint:staticcheck
-	s.Error(rr.Init(nil, s.mem, nil, BaseRecordReaderOptions{}, nil))
-	s.Error(rr.Init(s.ctx, nil, nil, BaseRecordReaderOptions{}, nil))
-	s.Error(rr.Init(s.ctx, s.mem, nil, BaseRecordReaderOptions{}, nil))
+	s.Error(rr.Init(nil, s.mem, s.log, nil, BaseRecordReaderOptions{}, nil))
+	s.Error(rr.Init(s.ctx, nil, s.log, nil, BaseRecordReaderOptions{}, nil))
+	s.Error(rr.Init(s.ctx, s.mem, nil, nil, BaseRecordReaderOptions{}, nil))
+	s.Error(rr.Init(s.ctx, s.mem, s.log, nil, BaseRecordReaderOptions{}, nil))
 }
 
 type implNoInitialResultSet struct {
@@ -80,7 +85,7 @@ func (s *implNoInitialResultSet) NextResultSet(ctx context.Context, rec arrow.Re
 func (s *BaseRecordReaderSuite) TestInitNoInitialResultSet() {
 	rr := &BaseRecordReader{}
 	defer rr.Release()
-	s.ErrorContains(rr.Init(s.ctx, s.mem, nil, BaseRecordReaderOptions{}, &implNoInitialResultSet{}), "no result set")
+	s.ErrorContains(rr.Init(s.ctx, s.mem, s.log, nil, BaseRecordReaderOptions{}, &implNoInitialResultSet{}), "no result set")
 }
 
 // When there are parameters but the parameters are empty, we get back an empty reader
@@ -92,7 +97,7 @@ func (s *BaseRecordReaderSuite) TestInitNoParams() {
 	schema := arrow.NewSchema([]arrow.Field{}, nil)
 	params, err := array.NewRecordReader(schema, []arrow.RecordBatch{})
 	s.NoError(err)
-	s.NoError(rr.Init(s.ctx, s.mem, params, BaseRecordReaderOptions{}, impl))
+	s.NoError(rr.Init(s.ctx, s.mem, s.log, params, BaseRecordReaderOptions{}, impl))
 	s.False(rr.Next())
 	s.True(schema.Equal(rr.Schema()))
 	s.NoError(rr.Err())
@@ -135,7 +140,7 @@ func (s *BaseRecordReaderSuite) TestInitBeginAppending() {
 	}
 	rr := &BaseRecordReader{}
 	defer rr.Release()
-	s.NoError(rr.Init(s.ctx, s.mem, nil, BaseRecordReaderOptions{}, impl))
+	s.NoError(rr.Init(s.ctx, s.mem, s.log, nil, BaseRecordReaderOptions{}, impl))
 	s.False(rr.Next())
 	s.True(impl.schema.Equal(rr.Schema()))
 	s.NoError(rr.Err())
@@ -187,7 +192,7 @@ func (s *BaseRecordReaderSuite) TestNextCallsClose() {
 		rr := &BaseRecordReader{}
 		defer rr.Release()
 		options := BaseRecordReaderOptions{BatchRowLimit: 2}
-		s.NoError(rr.Init(s.ctx, s.mem, nil, options, impl))
+		s.NoError(rr.Init(s.ctx, s.mem, s.log, nil, options, impl))
 		s.True(rr.Next())
 		s.Equal(int64(2), rr.Record().NumRows())
 		s.False(rr.done)
@@ -205,7 +210,7 @@ func (s *BaseRecordReaderSuite) TestNextCallsClose() {
 		rr := &BaseRecordReader{}
 		defer rr.Release()
 		options := BaseRecordReaderOptions{BatchRowLimit: 4}
-		s.NoError(rr.Init(s.ctx, s.mem, nil, options, impl))
+		s.NoError(rr.Init(s.ctx, s.mem, s.log, nil, options, impl))
 		s.True(rr.Next())
 		s.Equal(int64(2), rr.Record().NumRows())
 		s.True(rr.done)
@@ -265,7 +270,7 @@ func (s *BaseRecordReaderSuite) TestNextResultSetAcrossParams() {
 	rr := &BaseRecordReader{}
 	defer rr.Release()
 	options := BaseRecordReaderOptions{BatchRowLimit: 4}
-	s.NoError(rr.Init(s.ctx, s.mem, params, options, impl))
+	s.NoError(rr.Init(s.ctx, s.mem, s.log, params, options, impl))
 
 	s.True(rr.Next())
 	s.Equal(int64(4), rr.Record().NumRows())
@@ -304,7 +309,7 @@ func (s *BaseRecordReaderSuite) TestByteLimit() {
 	rr := &BaseRecordReader{}
 	defer rr.Release()
 	options := BaseRecordReaderOptions{BatchByteLimit: 10}
-	s.NoError(rr.Init(s.ctx, s.mem, nil, options, impl))
+	s.NoError(rr.Init(s.ctx, s.mem, s.log, nil, options, impl))
 
 	s.True(rr.Next())
 	s.Equal(int64(2), rr.Record().NumRows())
@@ -348,7 +353,7 @@ func (s *BaseRecordReaderSuite) TestOverflow() {
 	rr := &BaseRecordReader{}
 	defer rr.Release()
 	options := BaseRecordReaderOptions{}
-	s.NoError(rr.Init(s.ctx, s.mem, nil, options, impl))
+	s.NoError(rr.Init(s.ctx, s.mem, s.log, nil, options, impl))
 
 	s.True(rr.Next())
 	s.Equal(int64(1), rr.Record().NumRows())
@@ -363,4 +368,57 @@ func (s *BaseRecordReaderSuite) TestOverflow() {
 	s.False(rr.Next())
 	s.Nil(rr.impl)
 	s.NoError(rr.Err())
+}
+
+type implCancel struct {
+	implNextCallsClose
+	cancelled chan struct{}
+}
+
+func (s *implCancel) Cancel() {
+	s.cancelled <- struct{}{}
+}
+
+func (s *implCancel) Close() error {
+	close(s.cancelled)
+	return s.implNextCallsClose.Close()
+}
+
+func (s *BaseRecordReaderSuite) TestCancel() {
+	impl := &implCancel{
+		cancelled: make(chan struct{}),
+	}
+
+	rr := &BaseRecordReader{}
+	defer rr.Release()
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.NoError(rr.Init(ctx, s.mem, s.log, nil, BaseRecordReaderOptions{
+		BatchRowLimit: 1,
+	}, impl))
+	s.True(rr.Next())
+	cancel()
+	<-impl.cancelled
+	s.False(rr.Next())
+}
+
+func (s *BaseRecordReaderSuite) TestNoCancel() {
+	impl := &implCancel{
+		cancelled: make(chan struct{}),
+	}
+
+	ctx, cancel := context.WithCancel(s.ctx)
+	func() {
+		rr := &BaseRecordReader{}
+		defer rr.Release()
+		s.NoError(rr.Init(ctx, s.mem, s.log, nil, BaseRecordReaderOptions{
+			BatchRowLimit: 1,
+		}, impl))
+		s.True(rr.Next())
+		s.True(rr.Next())
+		s.False(rr.Next())
+	}()
+
+	cancel()
+	_, ok := <-impl.cancelled
+	s.False(ok, "cancelled channel should be closed")
 }

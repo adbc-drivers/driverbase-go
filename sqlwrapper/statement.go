@@ -298,7 +298,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 	options := driverbase.BaseRecordReaderOptions{
 		BatchRowLimit: int64(s.batchSize),
 	}
-	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.boundStream,
+	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.stmt.Logger, s.boundStream,
 		options, impl); err != nil {
 		// Clear boundStream on error to prevent double-release in Close()
 		s.boundStream = nil
