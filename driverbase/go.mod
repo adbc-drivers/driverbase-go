@@ -14,7 +14,7 @@
 
 module github.com/adbc-drivers/driverbase-go/driverbase
 
-go 1.25.5
+go 1.26.0
 
 require (
 	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-00010101000000-000000000000
