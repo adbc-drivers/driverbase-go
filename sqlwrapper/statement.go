@@ -320,6 +320,7 @@ func (s *statementImpl) Close() error {
 		return s.Base().ErrorHelper.InvalidState("statement already closed")
 	}
 	s.closed = true
+	s.conn = nil
 
 	// Release bound stream if any
 	if s.boundStream != nil {
