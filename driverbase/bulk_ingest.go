@@ -600,7 +600,7 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 		})
 	}
 
-	err = errors.Join(g.Wait(), cancelCtx.Err())
+	err = errors.Join(g.Wait(), bi.Ctx.Err())
 
 	if needsInit {
 		// N.B. we always call finalize, even on error!
