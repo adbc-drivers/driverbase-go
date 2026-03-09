@@ -418,6 +418,9 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 					batch.Release()
 					if err != nil {
 						return err
+					} else if cancelCtx.Err() != nil {
+						// We'll check err at the end
+						return nil
 					}
 					bi.transformedBatches <- transformed
 				}
@@ -461,6 +464,8 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 					// TODO(lidavidm): in these cases, don't we still need to delete the file?
 					if err != nil {
 						return errors.Join(err, sink.Close())
+					} else if innerCtx.Err() != nil {
+						return sink.Close()
 					} else if rows == 0 {
 						_ = sink.Close()
 						break
@@ -507,9 +512,11 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 						default:
 						}
 
-						uploaded, err := fileImpl.Upload(bi.Ctx, pendingBuffer)
+						uploaded, err := fileImpl.Upload(innerCtx, pendingBuffer)
 						if err != nil {
 							return err
+						} else if innerCtx.Err() != nil {
+							return nil
 						}
 
 						pendingFiles <- uploaded
@@ -546,13 +553,18 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 			default:
 			}
 
-			err := bi.Impl.Copy(bi.Ctx, pendingFile)
+			err := bi.Impl.Copy(cancelCtx, pendingFile)
 			if err != nil {
 				if needsUpload {
 					recycleBin <- pendingFile
 				}
 				bi.Logger.Debug("failed to ingest file", "uri", pendingFile, "err", err)
 				return err
+			} else if cancelCtx.Err() != nil {
+				if needsUpload {
+					recycleBin <- pendingFile
+				}
+				return nil
 			}
 
 			rowsWritten.Add(pendingFile.NumRows())
@@ -588,7 +600,7 @@ func (bi *BulkIngestManager) ExecuteIngest() (int64, error) {
 		})
 	}
 
-	err = g.Wait()
+	err = errors.Join(g.Wait(), cancelCtx.Err())
 
 	if needsInit {
 		// N.B. we always call finalize, even on error!
