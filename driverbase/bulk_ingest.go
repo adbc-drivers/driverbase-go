@@ -31,6 +31,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/parquet"
+	"github.com/apache/arrow-go/v18/parquet/compress"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	"golang.org/x/sync/errgroup"
 )
@@ -92,8 +93,8 @@ func NewBulkIngestOptions() BulkIngestOptions {
 		MaxPendingBuffers:   2,
 		UploaderParallelism: 2,
 		WriterProps: WriterProps{
-			MaxBytes:           10 * 1024 * 1024, // 10MiB
-			ParquetWriterProps: parquet.NewWriterProperties(),
+			MaxBytes:           64 * 1024 * 1024, // 64MiB
+			ParquetWriterProps: parquet.NewWriterProperties(parquet.WithCompression(compress.Codecs.Snappy)),
 			ArrowWriterProps:   pqarrow.NewArrowWriterProperties(),
 			ArrowIpcProps:      []ipc.Option{ipc.WithZstd()},
 		},
@@ -630,7 +631,7 @@ func writeParquetForIngestion(writerProps *WriterProps, schema *arrow.Schema, ba
 				return nil
 			}
 
-			if err := w.Write(record); err != nil {
+			if err := w.WriteBuffered(record); err != nil {
 				return err
 			}
 			rows += int64(record.NumRows())
