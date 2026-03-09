@@ -31,6 +31,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/parquet"
+	"github.com/apache/arrow-go/v18/parquet/compress"
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	"golang.org/x/sync/errgroup"
 )
@@ -92,8 +93,8 @@ func NewBulkIngestOptions() BulkIngestOptions {
 		MaxPendingBuffers:   2,
 		UploaderParallelism: 2,
 		WriterProps: WriterProps{
-			MaxBytes:           10 * 1024 * 1024, // 10MiB
-			ParquetWriterProps: parquet.NewWriterProperties(),
+			MaxBytes:           64 * 1024 * 1024, // 64MiB
+			ParquetWriterProps: parquet.NewWriterProperties(parquet.WithCompression(compress.Codecs.Snappy)),
 			ArrowWriterProps:   pqarrow.NewArrowWriterProperties(),
 			ArrowIpcProps:      []ipc.Option{ipc.WithZstd()},
 		},
@@ -630,21 +631,26 @@ func writeParquetForIngestion(writerProps *WriterProps, schema *arrow.Schema, ba
 				return nil
 			}
 
-			if err := w.Write(record); err != nil {
+			if err := w.WriteBuffered(record); err != nil {
 				return err
 			}
 			rows += int64(record.NumRows())
 			return nil
 		}(record)
 
+		// XXX: with WriteBuffered, TotalBytesWritten is fairly
+		// inaccurate; RowGroupTotalBytesWritten also isn't accurate,
+		// contrary to the docstring. There's also no way to ask for
+		// an explicit flush. So the byte limit probably won't work as
+		// well as we expect...
 		if err != nil {
 			return 0, 0, err
-		} else if w.RowGroupTotalBytesWritten() >= writerProps.MaxBytes {
+		} else if w.TotalBytesWritten() >= writerProps.MaxBytes {
 			break
 		}
 	}
 
-	if w.RowGroupTotalBytesWritten() == 0 {
+	if rows == 0 {
 		return 0, 0, nil
 	}
 
