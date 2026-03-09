@@ -638,14 +638,19 @@ func writeParquetForIngestion(writerProps *WriterProps, schema *arrow.Schema, ba
 			return nil
 		}(record)
 
+		// XXX: with WriteBuffered, TotalBytesWritten is fairly
+		// inaccurate; RowGroupTotalBytesWritten also isn't accurate,
+		// contrary to the docstring. There's also no way to ask for
+		// an explicit flush. So the byte limit probably won't work as
+		// well as we expect...
 		if err != nil {
 			return 0, 0, err
-		} else if w.RowGroupTotalBytesWritten() >= writerProps.MaxBytes {
+		} else if w.TotalBytesWritten() >= writerProps.MaxBytes {
 			break
 		}
 	}
 
-	if w.RowGroupTotalBytesWritten() == 0 {
+	if rows == 0 {
 		return 0, 0, nil
 	}
 
