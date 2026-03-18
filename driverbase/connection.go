@@ -611,6 +611,22 @@ func (cnxn *connection) GetTableTypes(ctx context.Context) (array.RecordReader, 
 	return array.NewRecordReader(adbc.TableTypesSchema, []arrow.RecordBatch{final})
 }
 
+func (cnxn *connection) GetStatistics(ctx context.Context, catalog, dbSchema, tableName *string, approximate bool) (array.RecordReader, error) {
+	stats, ok := cnxn.ConnectionImpl.(adbc.ConnectionGetStatistics)
+	if !ok {
+		return nil, cnxn.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "GetStatistics")
+	}
+	return stats.GetStatistics(ctx, catalog, dbSchema, tableName, approximate)
+}
+
+func (cnxn *connection) GetStatisticNames(ctx context.Context) (array.RecordReader, error) {
+	stats, ok := cnxn.ConnectionImpl.(adbc.ConnectionGetStatistics)
+	if !ok {
+		return nil, cnxn.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "GetStatisticNames")
+	}
+	return stats.GetStatisticNames(ctx)
+}
+
 func (cnxn *connection) Commit(ctx context.Context) error {
 	if cnxn.Base().Autocommit {
 		return cnxn.Base().ErrorHelper.Errorf(adbc.StatusInvalidState, ConnectionMessageCannotCommit)
