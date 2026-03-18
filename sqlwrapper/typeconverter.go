@@ -856,19 +856,8 @@ func (d DefaultTypeConverter) ConvertRawColumnType(colType ColumnType) (arrow.Da
 		if colType.Precision != nil && colType.Scale != nil {
 			precision := *colType.Precision
 			scale := *colType.Scale
-			if scale == 0 && precision <= 19 { // max digits for int64
-				// Treat as integer type if precision fits in int64
-				arrowType := arrow.PrimitiveTypes.Int64
-				metadata := arrow.MetadataFrom(map[string]string{
-					MetaKeyDatabaseTypeName: colType.DatabaseTypeName,
-					MetaKeyColumnName:       colType.Name,
-					MetaKeyPrecision:        fmt.Sprintf("%d", precision),
-					MetaKeyScale:            fmt.Sprintf("%d", scale),
-				})
-				return arrowType, nullable, metadata, nil
-			}
 
-			// Otherwise, create appropriate decimal type
+			// Create appropriate decimal type
 			arrowType, err := arrow.NarrowestDecimalType(int32(precision), int32(scale))
 			if err != nil {
 				return nil, false, arrow.Metadata{}, fmt.Errorf("invalid decimal precision/scale (%d, %d): %w", precision, scale, err)
