@@ -487,6 +487,16 @@ func (ins *decimalInserter[T]) AppendValue(sqlValue any) error {
 	return ins.builder.AppendValueFromString(val)
 }
 
+// Null inserter for columns with Arrow NullType
+type nullInserter struct {
+	builder *array.NullBuilder
+}
+
+func (ins *nullInserter) AppendValue(sqlValue any) error {
+	ins.builder.AppendNull()
+	return nil
+}
+
 // Default/fallback inserter for unknown types
 type defaultInserter struct {
 	builder array.Builder
@@ -556,6 +566,10 @@ func (d DefaultTypeConverter) CreateInserter(field *arrow.Field, builder array.B
 	// Timestamp types
 	case *arrow.TimestampType:
 		return &timestampInserter{builder: builder.(*array.TimestampBuilder)}, nil
+
+	// Null type
+	case *arrow.NullType:
+		return &nullInserter{builder: builder.(*array.NullBuilder)}, nil
 
 	// Decimal types
 	case *arrow.Decimal32Type:
@@ -998,6 +1012,10 @@ func (d DefaultTypeConverter) mapSQLTypeNameToArrowType(typeName string) arrow.D
 	case "BOOLEAN", "BOOL":
 		return arrow.FixedWidthTypes.Boolean
 
+	// Null type
+	case "NULL":
+		return arrow.Null
+
 	// JSON type
 	case "JSON":
 		jsonType, _ := extensions.NewJSONType(arrow.BinaryTypes.String)
@@ -1096,6 +1114,10 @@ func (d DefaultTypeConverter) ConvertArrowToGo(arrowArray arrow.Array, index int
 		}
 
 		return a.Value(index).ToTime(timestampType.Unit).In(tz), nil
+
+	// Null type
+	case *array.Null:
+		return nil, nil
 
 	// Fallback for any unhandled array types (including Decimal types)
 	default:
