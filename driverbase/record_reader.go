@@ -50,6 +50,14 @@ type RecordReaderImpl interface {
 	NextResultSet(ctx context.Context, rec arrow.RecordBatch, rowIdx int) (*arrow.Schema, error)
 }
 
+// DataDependentMetadata is an extension for databases where some type
+// metadata must be inferred from the data itself.  This allows updating the
+// schema after scanning the first batch of data but before emitting it.
+type DataDependentMetadata interface {
+	// Called after BeginAppending. Return nil if no changes are needed.
+	UpdateSchema(ctx context.Context, oldSchema *arrow.Schema, firstBatch arrow.RecordBatch) (*arrow.Schema, error)
+}
+
 type SynchronousCancel interface {
 	// Cancel is called to cancel the current query. Note that other
 	// methods may be called after, but Cancel will not be called
@@ -82,6 +90,7 @@ type BaseRecordReader struct {
 	// Current row index into paramRecord
 	paramIndex int
 	done       bool
+	peek       bool
 
 	keepReading chan struct{}
 	hasBatch    chan bool
@@ -194,7 +203,72 @@ func (rr *BaseRecordReader) Init(ctx context.Context, alloc memory.Allocator, lo
 		}
 	}()
 
+	if ddm, ok := rr.impl.(DataDependentMetadata); ok {
+		// append a batch
+		// no need to lock since this is during initialization
+		rr.keepReading <- struct{}{}
+		hasBatch := <-rr.hasBatch
+		rr.peek = true
+
+		if hasBatch {
+			DebugAssert(rr.nextBatch != nil, "BaseRecordReader: nextBatch is nil when updating schema")
+			updatedSchema, err := ddm.UpdateSchema(rr.ctx, rr.schema, rr.nextBatch)
+			if err != nil {
+				return err
+			}
+			// N.B. now builder schema won't match reader schema, but they
+			// should only mismatch in terms of metadata. We don't
+			// validate that here, though...
+			if updatedSchema != nil {
+				// Schema.Equal does check metadata, contrary to documentation
+				if !schemaEqualIgnoringMetadata(rr.schema, updatedSchema) {
+					return errors.New("driverbase: BaseRecordReader: updated schema from DataDependentMetadata does not match original schema")
+				}
+				rr.schema = updatedSchema
+
+				batch := rr.nextBatch
+				defer batch.Release()
+				rr.nextBatch = array.NewRecordBatch(updatedSchema, batch.Columns(), batch.NumRows())
+				rr.builder.Release()
+				rr.builder = array.NewRecordBuilder(rr.alloc, updatedSchema)
+			}
+		}
+	}
+
 	return nil
+}
+
+func fieldEqualIgnoringMetadata(a, b arrow.Field) bool {
+	switch {
+	case a.Name != b.Name:
+		return false
+	case a.Nullable != b.Nullable:
+		return false
+	case !arrow.TypeEqual(a.Type, b.Type):
+		// default option for TypeEqual is to ignore metadata
+		return false
+	}
+	return true
+}
+
+func schemaEqualIgnoringMetadata(a, b *arrow.Schema) bool {
+	switch {
+	case a == b:
+		return true
+	case a == nil || b == nil:
+		return false
+	case len(a.Fields()) != len(b.Fields()):
+		return false
+	case a.Endianness() != b.Endianness():
+		return false
+	}
+
+	for i := range a.Fields() {
+		if !fieldEqualIgnoringMetadata(a.Field(i), b.Field(i)) {
+			return false
+		}
+	}
+	return true
 }
 
 func (rr *BaseRecordReader) Close() {
@@ -294,6 +368,12 @@ func (rr *BaseRecordReader) Next() bool {
 
 	rr.mu.Lock()
 	defer rr.mu.Unlock()
+
+	if rr.peek {
+		DebugAssert(rr.nextBatch != nil, "BaseRecordReader: peek is true but nextBatch is nil")
+		rr.peek = false
+		return true
+	}
 
 	if rr.nextBatch != nil {
 		rr.nextBatch.Release()
