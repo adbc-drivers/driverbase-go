@@ -24,6 +24,11 @@ import (
 )
 
 func ExtractGeoArrowSrid(field *arrow.Field) (int, bool) {
+	ext := GetExtensionName(field)
+	if ext != "geoarrow.wkb" && ext != "geoarrow.wkt" {
+		return 0, false
+	}
+
 	metadata, mdOk := field.Metadata.GetValue("ARROW:extension:metadata")
 	if !mdOk {
 		return 0, false
