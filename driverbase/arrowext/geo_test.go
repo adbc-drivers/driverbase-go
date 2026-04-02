@@ -96,7 +96,7 @@ func TestGetGeoArrowSrid(t *testing.T) {
 			ok:       false,
 		},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
+		t.Run(testCase.name+" (wkb)", func(t *testing.T) {
 			field := &arrow.Field{
 				Name:     "test",
 				Type:     arrow.BinaryTypes.Binary,
@@ -110,5 +110,51 @@ func TestGetGeoArrowSrid(t *testing.T) {
 			assert.Equal(t, testCase.ok, ok)
 			assert.Equal(t, testCase.expected, srid)
 		})
+
+		t.Run(testCase.name+" (wkt)", func(t *testing.T) {
+			field := &arrow.Field{
+				Name:     "test",
+				Type:     arrow.BinaryTypes.Binary,
+				Nullable: true,
+				Metadata: arrow.MetadataFrom(map[string]string{
+					"ARROW:extension:name":     "geoarrow.wkt",
+					"ARROW:extension:metadata": testCase.input,
+				}),
+			}
+			srid, ok := arrowext.ExtractGeoArrowSrid(field)
+			assert.Equal(t, testCase.ok, ok)
+			assert.Equal(t, testCase.expected, srid)
+		})
 	}
+}
+
+func TestGetGeoArrowSridInvalid(t *testing.T) {
+	t.Run("not geo", func(t *testing.T) {
+		field := &arrow.Field{
+			Name:     "test",
+			Type:     arrow.BinaryTypes.Binary,
+			Nullable: true,
+			Metadata: arrow.MetadataFrom(map[string]string{
+				"ARROW:extension:name":     "geoarrow.invalid",
+				"ARROW:extension:metadata": `{"crs":"EPSG:4326"}`,
+			}),
+		}
+		srid, ok := arrowext.ExtractGeoArrowSrid(field)
+		assert.False(t, ok)
+		assert.Equal(t, 0, srid)
+	})
+
+	t.Run("no metadata", func(t *testing.T) {
+		field := &arrow.Field{
+			Name:     "test",
+			Type:     arrow.BinaryTypes.Binary,
+			Nullable: true,
+			Metadata: arrow.MetadataFrom(map[string]string{
+				"ARROW:extension:name": "geoarrow.wkb",
+			}),
+		}
+		srid, ok := arrowext.ExtractGeoArrowSrid(field)
+		assert.False(t, ok)
+		assert.Equal(t, 0, srid)
+	})
 }

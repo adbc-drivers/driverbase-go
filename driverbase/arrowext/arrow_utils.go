@@ -32,3 +32,11 @@ func (EmptyReader) RecordBatch() arrow.RecordBatch { return nil }
 func (EmptyReader) Err() error                     { return nil }
 
 var _ array.RecordReader = &EmptyReader{}
+
+func GetExtensionName(field *arrow.Field) string {
+	extName, ok := field.Metadata.GetValue("ARROW:extension:name")
+	if !ok {
+		return ""
+	}
+	return extName
+}
