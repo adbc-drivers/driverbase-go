@@ -69,3 +69,30 @@ repos:
   rev: 03bf2427d2f60555ff1950c28bfa9369130ef15f
   hooks:
   - id: rat
+
+- repo: local
+  hooks:
+  - id: gofix-driverbase
+    name: go fix /driverbase
+    language: system
+    types: [go]
+    entry: bash -c 'cd driverbase && go fix'
+    pass_filenames: false
+  - id: gofix-sqlwrapper
+    name: go fix /sqlwrapper
+    language: system
+    types: [go]
+    entry: bash -c 'cd sqlwrapper && go fix'
+    pass_filenames: false
+  - id: gofix-testutil
+    name: go fix /testutil
+    language: system
+    types: [go]
+    entry: bash -c 'cd testutil && go fix'
+    pass_filenames: false
+  - id: gofix-validation
+    name: go fix /validation
+    language: system
+    types: [go]
+    entry: bash -c 'cd validation && go fix'
+    pass_filenames: false

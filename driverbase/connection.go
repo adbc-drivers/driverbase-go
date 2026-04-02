@@ -433,7 +433,7 @@ func (cnxn *connection) GetObjects(ctx context.Context, depth adbc.ObjectDepth, 
 	go func() {
 		defer close(addCatalogCh)
 		for _, cat := range catalogs {
-			addCatalogCh <- GetObjectsInfo{CatalogName: Nullable(cat)}
+			addCatalogCh <- GetObjectsInfo{CatalogName: new(cat)}
 		}
 	}()
 
@@ -448,7 +448,6 @@ func (cnxn *connection) GetObjects(ctx context.Context, depth adbc.ObjectDepth, 
 	gSchemas.SetLimit(cnxn.concurrency)
 	addDbSchemasCh := make(chan GetObjectsInfo, bufferSize)
 	for info := range addCatalogCh {
-		info := info
 		gSchemas.Go(func() error {
 			dbSchemas, err := helper.GetDBSchemasForCatalog(ctxSchemas, ValueOrZero(info.CatalogName), dbSchema)
 			if err != nil {
@@ -457,7 +456,7 @@ func (cnxn *connection) GetObjects(ctx context.Context, depth adbc.ObjectDepth, 
 
 			info.CatalogDbSchemas = make([]DBSchemaInfo, len(dbSchemas))
 			for i, sch := range dbSchemas {
-				info.CatalogDbSchemas[i] = DBSchemaInfo{DbSchemaName: Nullable(sch)}
+				info.CatalogDbSchemas[i] = DBSchemaInfo{DbSchemaName: new(sch)}
 			}
 
 			addDbSchemasCh <- info
@@ -477,14 +476,12 @@ func (cnxn *connection) GetObjects(ctx context.Context, depth adbc.ObjectDepth, 
 	gTables.SetLimit(cnxn.concurrency)
 	addTablesCh := make(chan GetObjectsInfo, bufferSize)
 	for info := range addDbSchemasCh {
-		info := info
 
 		gTables.Go(func() error {
 			gTablesInner, ctxTablesInner := errgroup.WithContext(ctxTables)
 			gTablesInner.SetLimit(cnxn.concurrency)
 			dbSchemaInfoCh := make(chan DBSchemaInfo, len(info.CatalogDbSchemas))
 			for _, catalogDbSchema := range info.CatalogDbSchemas {
-				catalogDbSchema := catalogDbSchema
 				gTablesInner.Go(func() error {
 					includeColumns := depth == adbc.ObjectDepthColumns
 					tables, err := helper.GetTablesForDBSchema(ctxTablesInner, ValueOrZero(info.CatalogName), ValueOrZero(catalogDbSchema.DbSchemaName), tableName, columnName, includeColumns)
@@ -799,8 +796,10 @@ func PatternToNamedArg(name string, pattern *string) sql.NamedArg {
 
 // Nullable wraps a value and returns a pointer to the value, which is
 // how nullable values are represented for purposes of JSON serialization.
+//
+//go:fix inline
 func Nullable[T any](val T) *T {
-	return &val
+	return new(val)
 }
 
 // ValueOrZero safely dereferences a pointer, returning the zero-value

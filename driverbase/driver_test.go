@@ -591,18 +591,18 @@ var dbObjects = map[string]map[string][]driverbase.TableInfo{
 				TableColumns: []driverbase.ColumnInfo{
 					{
 						ColumnName:      "col1",
-						OrdinalPosition: driverbase.Nullable(int32(1)),
-						Remarks:         driverbase.Nullable("the first column"),
+						OrdinalPosition: new(int32(1)),
+						Remarks:         new("the first column"),
 					},
 					{
 						ColumnName:      "col2",
-						OrdinalPosition: driverbase.Nullable(int32(2)),
-						Remarks:         driverbase.Nullable("the second column"),
+						OrdinalPosition: new(int32(2)),
+						Remarks:         new("the second column"),
 					},
 					{
 						ColumnName:      "col3",
-						OrdinalPosition: driverbase.Nullable(int32(3)),
-						Remarks:         driverbase.Nullable("the third column"),
+						OrdinalPosition: new(int32(3)),
+						Remarks:         new("the third column"),
 					},
 				},
 			},
@@ -619,12 +619,12 @@ var dbObjects = map[string]map[string][]driverbase.TableInfo{
 				TableColumns: []driverbase.ColumnInfo{
 					{
 						ColumnName:      "col4",
-						OrdinalPosition: driverbase.Nullable(int32(1)),
+						OrdinalPosition: new(int32(1)),
 					},
 				},
 				TableConstraints: []driverbase.ConstraintInfo{
 					{
-						ConstraintName:        driverbase.Nullable("baz_pk"),
+						ConstraintName:        new("baz_pk"),
 						ConstraintType:        "PRIMARY KEY",
 						ConstraintColumnNames: driverbase.RequiredList([]string{"col4"}),
 					},

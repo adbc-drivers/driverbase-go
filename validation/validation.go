@@ -77,7 +77,7 @@ type DriverQuirks interface {
 	// Whether it returns an error when attempting to ingest with an incompatible schema
 	SupportsErrorIngestIncompatibleSchema() bool
 	// Expected Metadata responses
-	GetMetadata(adbc.InfoCode) interface{}
+	GetMetadata(adbc.InfoCode) any
 	// Create a sample table from an arrow record
 	CreateSampleTable(tableName string, r arrow.RecordBatch) error
 	// Field Metadata for Sample Table for comparison
@@ -345,7 +345,7 @@ func (c *ConnectionTests) TestMetadataGetInfo() {
 				c.Nilf(exp, "got nil for info %s, expected: %s", adbc.InfoCode(code), exp)
 			} else {
 				expected := c.Quirks.GetMetadata(adbc.InfoCode(code))
-				var actual interface{}
+				var actual any
 
 				switch valUnion.ChildID(i) {
 				case 0:
