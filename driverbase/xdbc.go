@@ -88,6 +88,7 @@ func NullInt32ToPtr(i sql.NullInt32) *int32 {
 	return &i.Int32
 }
 
+//go:fix inline
 func ToPtr[T any](i T) *T {
-	return &i
+	return new(i)
 }
