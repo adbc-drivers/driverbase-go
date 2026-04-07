@@ -26,11 +26,14 @@ package driverbase
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.30.0"
 	"go.opentelemetry.io/otel/trace"
@@ -210,4 +213,234 @@ func EndSpan(span trace.Span, err error, options ...trace.SpanEndOption) {
 		span.SetStatus(codes.Ok, "")
 	}
 	span.End(options...)
+}
+
+// GetStatistics and GetStatisticNames helpers
+
+// Union type codes for ADBC GetStatistics statistic_value dense union.
+// These map to the union type codes defined in adbc.GetStatisticsSchema:
+//   - 0: int64 (exact counts, exact statistics)
+//   - 1: uint64 (large exact counts)
+//   - 2: float64 (approximate counts, approximate statistics)
+//   - 3: binary (encoded data like timestamps, complex values)
+const (
+	UnionTypeInt64   arrow.UnionTypeCode = 0
+	UnionTypeUint64  arrow.UnionTypeCode = 1
+	UnionTypeFloat64 arrow.UnionTypeCode = 2
+	UnionTypeBinary  arrow.UnionTypeCode = 3
+)
+
+// Statistic represents a single statistic value for a table or column.
+// This struct is used to accumulate statistics before building the final
+// Arrow RecordReader for GetStatistics results.
+//
+// Per ADBC v1.1.0 spec (adbc.h), certain statistics have type requirements:
+//   - row_count: int64 (when not approximate) or float64 (when approximate)
+//   - null_count: int64 (when not approximate) or float64 (when approximate)
+//
+// All other statistics can use any of the union types based on their natural type.
+type Statistic struct {
+	TableName  string
+	ColumnName *string // nil for table-level statistics
+	Key        int16
+	ValueKind  arrow.UnionTypeCode
+	ValueI64   int64
+	ValueU64   uint64
+	ValueF64   float64
+	ValueBin   []byte
+	Approx     bool
+}
+
+// NewInt64Stat creates a statistic with an int64 value.
+// Use this for exact integer statistics (e.g., exact row counts, exact null counts).
+func NewInt64Stat(table string, column *string, key int16, value int64, approx bool) Statistic {
+	return Statistic{
+		TableName:  table,
+		ColumnName: column,
+		Key:        key,
+		ValueKind:  UnionTypeInt64,
+		ValueI64:   value,
+		Approx:     approx,
+	}
+}
+
+// NewUint64Stat creates a statistic with a uint64 value.
+// Use this for large exact unsigned integer statistics.
+func NewUint64Stat(table string, column *string, key int16, value uint64, approx bool) Statistic {
+	return Statistic{
+		TableName:  table,
+		ColumnName: column,
+		Key:        key,
+		ValueKind:  UnionTypeUint64,
+		ValueU64:   value,
+		Approx:     approx,
+	}
+}
+
+// NewFloat64Stat creates a statistic with a float64 value.
+// Use this for approximate numeric statistics (e.g., approximate row counts, approximate null counts).
+// Per ADBC spec, row_count and null_count MUST use float64 when approximate=true.
+func NewFloat64Stat(table string, column *string, key int16, value float64, approx bool) Statistic {
+	return Statistic{
+		TableName:  table,
+		ColumnName: column,
+		Key:        key,
+		ValueKind:  UnionTypeFloat64,
+		ValueF64:   value,
+		Approx:     approx,
+	}
+}
+
+// NewBinaryStat creates a statistic with a binary value.
+// Use this for encoded data like timestamps (RFC3339), JSON, or complex values.
+func NewBinaryStat(table string, column *string, key int16, value []byte, approx bool) Statistic {
+	return Statistic{
+		TableName:  table,
+		ColumnName: column,
+		Key:        key,
+		ValueKind:  UnionTypeBinary,
+		ValueBin:   value,
+		Approx:     approx,
+	}
+}
+
+// EmptyGetStatisticsReader returns an empty GetStatistics result.
+// This is useful when no statistics are available for the requested filters.
+func EmptyGetStatisticsReader(alloc memory.Allocator) (array.RecordReader, error) {
+	bldr := array.NewRecordBuilder(alloc, adbc.GetStatisticsSchema)
+	defer bldr.Release()
+
+	rec := bldr.NewRecordBatch()
+	defer rec.Release()
+
+	return array.NewRecordReader(adbc.GetStatisticsSchema, []arrow.RecordBatch{rec})
+}
+
+// BuildGetStatisticsReader constructs an Arrow RecordReader from pre-computed statistics.
+// This function handles the complex nested Arrow structure required by ADBC GetStatistics.
+//
+// Parameters:
+//   - alloc: Memory allocator for Arrow builders
+//   - catalogOrder: List of catalog names in order
+//   - schemaOrder: Map of catalog name to ordered list of schema names
+//   - statsByCatalog: Map of catalog -> schema -> statistics list
+//
+// The function builds the nested structure:
+//
+//	catalog_name: string
+//	catalog_db_schemas: list<struct{
+//	    db_schema_name: string
+//	    db_schema_statistics: list<struct{
+//	        table_name: string
+//	        column_name: string (nullable)
+//	        statistic_key: int16
+//	        statistic_value: dense_union<int64, uint64, float64, binary>
+//	        statistic_is_approximate: bool
+//	    }>
+//	}>
+func BuildGetStatisticsReader(
+	alloc memory.Allocator,
+	catalogOrder []string,
+	schemaOrder map[string][]string,
+	statsByCatalog map[string]map[string][]Statistic,
+) (array.RecordReader, error) {
+	bldr := array.NewRecordBuilder(alloc, adbc.GetStatisticsSchema)
+	defer bldr.Release()
+
+	// Get all field builders
+	catalogNameBldr := bldr.Field(0).(*array.StringBuilder)
+	catalogSchemasBldr := bldr.Field(1).(*array.ListBuilder)
+	dbSchemaStructBldr := catalogSchemasBldr.ValueBuilder().(*array.StructBuilder)
+	dbSchemaNameBldr := dbSchemaStructBldr.FieldBuilder(0).(*array.StringBuilder)
+	dbSchemaStatsListBldr := dbSchemaStructBldr.FieldBuilder(1).(*array.ListBuilder)
+
+	statsStructBldr := dbSchemaStatsListBldr.ValueBuilder().(*array.StructBuilder)
+	tableNameBldr := statsStructBldr.FieldBuilder(0).(*array.StringBuilder)
+	columnNameBldr := statsStructBldr.FieldBuilder(1).(*array.StringBuilder)
+	statKeyBldr := statsStructBldr.FieldBuilder(2).(*array.Int16Builder)
+	statValueBldr := statsStructBldr.FieldBuilder(3).(*array.DenseUnionBuilder)
+	statApproxBldr := statsStructBldr.FieldBuilder(4).(*array.BooleanBuilder)
+
+	statI64Bldr := statValueBldr.Child(0).(*array.Int64Builder)
+	statU64Bldr := statValueBldr.Child(1).(*array.Uint64Builder)
+	statF64Bldr := statValueBldr.Child(2).(*array.Float64Builder)
+	statBinBldr := statValueBldr.Child(3).(*array.BinaryBuilder)
+
+	// Build Arrow structure from pre-computed statistics
+	for _, catalogName := range catalogOrder {
+		catalogNameBldr.Append(catalogName)
+		catalogSchemasBldr.Append(true)
+
+		for _, schema := range schemaOrder[catalogName] {
+			dbSchemaStructBldr.Append(true)
+			dbSchemaNameBldr.Append(schema)
+			dbSchemaStatsListBldr.Append(true)
+
+			for _, st := range statsByCatalog[catalogName][schema] {
+				statsStructBldr.Append(true)
+				tableNameBldr.Append(st.TableName)
+
+				if st.ColumnName == nil {
+					columnNameBldr.AppendNull()
+				} else {
+					columnNameBldr.Append(*st.ColumnName)
+				}
+
+				statKeyBldr.Append(st.Key)
+				statApproxBldr.Append(st.Approx)
+
+				statValueBldr.Append(st.ValueKind)
+				switch st.ValueKind {
+				case UnionTypeInt64:
+					statI64Bldr.Append(st.ValueI64)
+				case UnionTypeUint64:
+					statU64Bldr.Append(st.ValueU64)
+				case UnionTypeFloat64:
+					statF64Bldr.Append(st.ValueF64)
+				case UnionTypeBinary:
+					statBinBldr.Append(st.ValueBin)
+				default:
+					return nil, adbc.Error{
+						Code: adbc.StatusInternal,
+						Msg:  fmt.Sprintf("unknown statistic value kind: %d", st.ValueKind),
+					}
+				}
+			}
+		}
+	}
+
+	rec := bldr.NewRecordBatch()
+	defer rec.Release()
+
+	return array.NewRecordReader(adbc.GetStatisticsSchema, []arrow.RecordBatch{rec})
+}
+
+// StatisticNameKey represents a named statistic with its key for GetStatisticNames.
+type StatisticNameKey struct {
+	Name string
+	Key  int16
+}
+
+// BuildGetStatisticNamesReader constructs an Arrow RecordReader for GetStatisticNames.
+// Returns driver-specific statistics (keys >= 1024) in name/key pairs.
+// Pass nil or empty slice to return an empty result (e.g., for drivers with no custom statistics).
+func BuildGetStatisticNamesReader(
+	alloc memory.Allocator,
+	statistics []StatisticNameKey,
+) (array.RecordReader, error) {
+	bldr := array.NewRecordBuilder(alloc, adbc.GetStatisticNamesSchema)
+	defer bldr.Release()
+
+	nameBldr := bldr.Field(0).(*array.StringBuilder)
+	keyBldr := bldr.Field(1).(*array.Int16Builder)
+
+	for _, stat := range statistics {
+		nameBldr.Append(stat.Name)
+		keyBldr.Append(stat.Key)
+	}
+
+	rec := bldr.NewRecordBatch()
+	defer rec.Release()
+
+	return array.NewRecordReader(adbc.GetStatisticNamesSchema, []arrow.RecordBatch{rec})
 }
