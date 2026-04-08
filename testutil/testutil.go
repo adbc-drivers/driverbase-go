@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"testing"
 
@@ -50,9 +51,15 @@ func RecordFromJSON(t *testing.T, mem memory.Allocator, schema *arrow.Schema, js
 	return record
 }
 
+// Statistic represents a single statistic extracted from ADBC GetStatistics results.
+type Statistic struct {
+	ColumnName     *string
+	StatisticKey   int16
+	StatisticValue any
+	IsApproximate  bool
+}
+
 // ExtractStatisticsForTable extracts statistics for a specific table from GetStatistics result.
-// Returns a slice of maps, each containing statistic_key, statistic_value, statistic_is_approximate,
-// and optionally column_name.
 //
 // This helper navigates the nested ADBC GetStatistics schema:
 //
@@ -67,53 +74,53 @@ func RecordFromJSON(t *testing.T, mem memory.Allocator, schema *arrow.Schema, js
 //	        statistic_is_approximate: bool
 //	    }>
 //	}>
-func ExtractStatisticsForTable(rec arrow.RecordBatch, catalog, schema, table string) []map[string]any {
+func ExtractStatisticsForTable(rec arrow.RecordBatch, catalog, schema, table string) []Statistic {
 	catArr, ok := rec.Column(0).(*array.String)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected column 0 (catalog_name) to be String, got %T", rec.Column(0)))
 	}
 	schemaList, ok := rec.Column(1).(*array.List)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected column 1 (catalog_db_schemas) to be List, got %T", rec.Column(1)))
 	}
 	schemaStruct, ok := schemaList.ListValues().(*array.Struct)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected catalog_db_schemas list values to be Struct, got %T", schemaList.ListValues()))
 	}
 	dbSchemaNameArr, ok := schemaStruct.Field(0).(*array.String)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected db_schema_name field to be String, got %T", schemaStruct.Field(0)))
 	}
 	statsListArr, ok := schemaStruct.Field(1).(*array.List)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected db_schema_statistics field to be List, got %T", schemaStruct.Field(1)))
 	}
 	statsStruct, ok := statsListArr.ListValues().(*array.Struct)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected db_schema_statistics list values to be Struct, got %T", statsListArr.ListValues()))
 	}
 	tableNameArr, ok := statsStruct.Field(0).(*array.String)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected table_name field to be String, got %T", statsStruct.Field(0)))
 	}
 	columnNameArr, ok := statsStruct.Field(1).(*array.String)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected column_name field to be String, got %T", statsStruct.Field(1)))
 	}
 	statKeyArr, ok := statsStruct.Field(2).(*array.Int16)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected statistic_key field to be Int16, got %T", statsStruct.Field(2)))
 	}
 	statValueArr, ok := statsStruct.Field(3).(*array.DenseUnion)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected statistic_value field to be DenseUnion, got %T", statsStruct.Field(3)))
 	}
 	statApproxArr, ok := statsStruct.Field(4).(*array.Boolean)
 	if !ok {
-		return nil
+		panic(fmt.Sprintf("expected statistic_is_approximate field to be Boolean, got %T", statsStruct.Field(4)))
 	}
 
-	var results []map[string]any
+	var results []Statistic
 
 	for i := range rec.NumRows() {
 		if catArr.IsNull(int(i)) || catArr.Value(int(i)) != catalog {
@@ -130,14 +137,15 @@ func ExtractStatisticsForTable(rec arrow.RecordBatch, catalog, schema, table str
 					continue
 				}
 
-				stat := map[string]any{
-					"statistic_key":            statKeyArr.Value(k),
-					"statistic_is_approximate": statApproxArr.Value(k),
+				stat := Statistic{
+					StatisticKey:  statKeyArr.Value(k),
+					IsApproximate: statApproxArr.Value(k),
 				}
 
 				// Extract column name (nullable)
 				if !columnNameArr.IsNull(k) {
-					stat["column_name"] = columnNameArr.Value(k)
+					colName := columnNameArr.Value(k)
+					stat.ColumnName = &colName
 				}
 
 				// Extract statistic value from dense union
@@ -147,16 +155,16 @@ func ExtractStatisticsForTable(rec arrow.RecordBatch, catalog, schema, table str
 				switch typeCode {
 				case 0: // int64
 					child := statValueArr.Field(0).(*array.Int64)
-					stat["statistic_value"] = child.Value(valueOffset)
+					stat.StatisticValue = child.Value(valueOffset)
 				case 1: // uint64
 					child := statValueArr.Field(1).(*array.Uint64)
-					stat["statistic_value"] = child.Value(valueOffset)
+					stat.StatisticValue = child.Value(valueOffset)
 				case 2: // float64
 					child := statValueArr.Field(2).(*array.Float64)
-					stat["statistic_value"] = child.Value(valueOffset)
+					stat.StatisticValue = child.Value(valueOffset)
 				case 3: // binary
 					child := statValueArr.Field(3).(*array.Binary)
-					stat["statistic_value"] = child.Value(valueOffset)
+					stat.StatisticValue = child.Value(valueOffset)
 				}
 
 				results = append(results, stat)
@@ -166,27 +174,13 @@ func ExtractStatisticsForTable(rec arrow.RecordBatch, catalog, schema, table str
 	return results
 }
 
-// StatisticsToLookupMaps converts a slice of statistics maps (from ExtractStatisticsForTable)
-// into lookup maps for easier test assertions. Each statistic in the input is expected to have:
-//   - "statistic_key" (int16): The statistic identifier
-//   - "statistic_value" (any): The statistic value (int64, uint64, float64, or []byte)
-//   - "statistic_is_approximate" (bool): Whether the statistic is approximate
-//
-// Returns two maps:
-//   - values: Maps statistic key to its value
-//   - isApproximate: Maps statistic key to its approximate flag
-func StatisticsToLookupMaps(stats []map[string]any) (
-	values map[int16]any,
-	isApproximate map[int16]bool,
-) {
-	values = make(map[int16]any)
-	isApproximate = make(map[int16]bool)
-
+// StatisticsToLookupMap converts a slice of statistics (from ExtractStatisticsForTable)
+// into a lookup map for easier test assertions.
+// Returns a map from statistic key to the full Statistic struct.
+func StatisticsToLookupMap(stats []Statistic) map[int16]Statistic {
+	result := make(map[int16]Statistic)
 	for _, stat := range stats {
-		key := stat["statistic_key"].(int16)
-		values[key] = stat["statistic_value"]
-		isApproximate[key] = stat["statistic_is_approximate"].(bool)
+		result[stat.StatisticKey] = stat
 	}
-
-	return values, isApproximate
+	return result
 }

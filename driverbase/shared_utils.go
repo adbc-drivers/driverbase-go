@@ -217,28 +217,21 @@ func EndSpan(span trace.Span, err error, options ...trace.SpanEndOption) {
 
 // GetStatistics and GetStatisticNames helpers
 
-// Union type codes for ADBC GetStatistics statistic_value dense union.
-// These map to the union type codes defined in adbc.GetStatisticsSchema:
-//   - 0: int64 (exact counts, exact statistics)
-//   - 1: uint64 (large exact counts)
-//   - 2: float64 (approximate counts, approximate statistics)
-//   - 3: binary (encoded data like timestamps, complex values)
-const (
-	UnionTypeInt64   arrow.UnionTypeCode = 0
-	UnionTypeUint64  arrow.UnionTypeCode = 1
-	UnionTypeFloat64 arrow.UnionTypeCode = 2
-	UnionTypeBinary  arrow.UnionTypeCode = 3
-)
+// UnionTypeInt64 is the dense union type code for int64 statistic values.
+const UnionTypeInt64 arrow.UnionTypeCode = 0
+
+// UnionTypeUint64 is the dense union type code for uint64 statistic values.
+const UnionTypeUint64 arrow.UnionTypeCode = 1
+
+// UnionTypeFloat64 is the dense union type code for float64 statistic values.
+const UnionTypeFloat64 arrow.UnionTypeCode = 2
+
+// UnionTypeBinary is the dense union type code for binary statistic values.
+const UnionTypeBinary arrow.UnionTypeCode = 3
 
 // Statistic represents a single statistic value for a table or column.
 // This struct is used to accumulate statistics before building the final
 // Arrow RecordReader for GetStatistics results.
-//
-// Per ADBC v1.1.0 spec (adbc.h), certain statistics have type requirements:
-//   - row_count: int64 (when not approximate) or float64 (when approximate)
-//   - null_count: int64 (when not approximate) or float64 (when approximate)
-//
-// All other statistics can use any of the union types based on their natural type.
 type Statistic struct {
 	TableName  string
 	ColumnName *string // nil for table-level statistics
@@ -252,7 +245,6 @@ type Statistic struct {
 }
 
 // NewInt64Stat creates a statistic with an int64 value.
-// Use this for exact integer statistics (e.g., exact row counts, exact null counts).
 func NewInt64Stat(table string, column *string, key int16, value int64, approx bool) Statistic {
 	return Statistic{
 		TableName:  table,
@@ -265,7 +257,6 @@ func NewInt64Stat(table string, column *string, key int16, value int64, approx b
 }
 
 // NewUint64Stat creates a statistic with a uint64 value.
-// Use this for large exact unsigned integer statistics.
 func NewUint64Stat(table string, column *string, key int16, value uint64, approx bool) Statistic {
 	return Statistic{
 		TableName:  table,
@@ -278,8 +269,6 @@ func NewUint64Stat(table string, column *string, key int16, value uint64, approx
 }
 
 // NewFloat64Stat creates a statistic with a float64 value.
-// Use this for approximate numeric statistics (e.g., approximate row counts, approximate null counts).
-// Per ADBC spec, row_count and null_count MUST use float64 when approximate=true.
 func NewFloat64Stat(table string, column *string, key int16, value float64, approx bool) Statistic {
 	return Statistic{
 		TableName:  table,
@@ -292,7 +281,6 @@ func NewFloat64Stat(table string, column *string, key int16, value float64, appr
 }
 
 // NewBinaryStat creates a statistic with a binary value.
-// Use this for encoded data like timestamps (RFC3339), JSON, or complex values.
 func NewBinaryStat(table string, column *string, key int16, value []byte, approx bool) Statistic {
 	return Statistic{
 		TableName:  table,
@@ -306,14 +294,8 @@ func NewBinaryStat(table string, column *string, key int16, value []byte, approx
 
 // EmptyGetStatisticsReader returns an empty GetStatistics result.
 // This is useful when no statistics are available for the requested filters.
-func EmptyGetStatisticsReader(alloc memory.Allocator) (array.RecordReader, error) {
-	bldr := array.NewRecordBuilder(alloc, adbc.GetStatisticsSchema)
-	defer bldr.Release()
-
-	rec := bldr.NewRecordBatch()
-	defer rec.Release()
-
-	return array.NewRecordReader(adbc.GetStatisticsSchema, []arrow.RecordBatch{rec})
+func EmptyGetStatisticsReader() (array.RecordReader, error) {
+	return array.NewRecordReader(adbc.GetStatisticsSchema, []arrow.RecordBatch{})
 }
 
 // BuildGetStatisticsReader constructs an Arrow RecordReader from pre-computed statistics.
@@ -423,7 +405,6 @@ type StatisticNameKey struct {
 
 // BuildGetStatisticNamesReader constructs an Arrow RecordReader for GetStatisticNames.
 // Returns driver-specific statistics (keys >= 1024) in name/key pairs.
-// Pass nil or empty slice to return an empty result (e.g., for drivers with no custom statistics).
 func BuildGetStatisticNamesReader(
 	alloc memory.Allocator,
 	statistics []StatisticNameKey,
