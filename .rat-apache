@@ -24,4 +24,8 @@ driverbase/rotating_file_writer.go
 driverbase/rotating_file_writer_test.go
 driverbase/shared_utils.go
 driverbase/statement.go
+ffitemplate/_tmpl/driver.go.tmpl
+ffitemplate/_tmpl/utils.c.tmpl
+ffitemplate/_tmpl/utils.h.tmpl
+ffitemplate/main.go
 validation/validation.go
