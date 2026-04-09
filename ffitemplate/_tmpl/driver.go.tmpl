@@ -63,6 +63,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/cdata"
@@ -199,7 +200,7 @@ func poison(err *C.struct_AdbcError, fname string, e interface{}) C.AdbcStatusCo
 }
 
 // Check environment variables and enable logging if possible.
-func initLoggingFromEnv(db adbc.Database) {
+func initLoggingFromEnv(db adbc.DatabaseLogging) {
 	logLevel := slog.LevelError
 	switch strings.ToLower(os.Getenv(logLevelEnvVar)) {
 	case "debug":
@@ -214,7 +215,7 @@ func initLoggingFromEnv(db adbc.Database) {
 	case "":
 		return
 	default:
-		printLoggingHelp()
+		fmt.Fprintf(os.Stderr, "{{.PrefixLower}}: to enable logging, set %s to 'debug', 'info', 'warn', or 'error'", logLevelEnvVar)
 		return
 	}
 
@@ -223,19 +224,8 @@ func initLoggingFromEnv(db adbc.Database) {
 		Level:     logLevel,
 	})
 	logger := slog.New(h)
-
-	ext, ok := db.(adbc.DatabaseLogging)
-	if !ok {
-		logger.Error("{{.PrefixLower}} does not support logging")
-		return
-	}
-	ext.SetLogger(logger)
+	db.SetLogger(logger)
 }
-
-func printLoggingHelp() {
-	fmt.Fprintf(os.Stderr, "{{.PrefixLower}}: to enable logging, set %s to 'debug', 'info', 'warn', or 'error'", logLevelEnvVar)
-}
-
 
 // Allocate a new cgo.Handle and store its address in a heap-allocated
 // uintptr_t.  Experimentally, this was found to be necessary, else
@@ -462,8 +452,10 @@ func exportRecordReader(rdr array.RecordReader, stream *C.struct_ArrowArrayStrea
 }
 
 type cDatabase struct {
+	cancellableContext
+
 	opts map[string]string
-	db   adbc.Database
+	db   driverbase.Database
 }
 
 //export {{.Prefix}}DatabaseGetOption
@@ -478,12 +470,12 @@ func {{.Prefix}}DatabaseGetOption(db *C.struct_AdbcDatabase, key *C.cchar_t, val
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := cdb.db.(adbc.GetSetOptions)
+	opts, ok := cdb.db.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcDatabaseGetOption: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
-	val, e := opts.GetOption(C.GoString(key))
+	val, e := opts.GetOption(cdb.newContext(), C.GoString(key))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
@@ -503,12 +495,12 @@ func {{.Prefix}}DatabaseGetOptionBytes(db *C.struct_AdbcDatabase, key *C.cchar_t
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := cdb.db.(adbc.GetSetOptions)
+	opts, ok := cdb.db.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcDatabaseGetOptionBytes: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
-	val, e := opts.GetOptionBytes(C.GoString(key))
+	val, e := opts.GetOptionBytes(cdb.newContext(), C.GoString(key))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
@@ -528,13 +520,7 @@ func {{.Prefix}}DatabaseGetOptionDouble(db *C.struct_AdbcDatabase, key *C.cchar_
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := cdb.db.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcDatabaseGetOptionDouble: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	val, e := opts.GetOptionDouble(C.GoString(key))
+	val, e := cdb.db.GetOptionDouble(cdb.newContext(), C.GoString(key))
 	*value = C.double(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
@@ -551,13 +537,7 @@ func {{.Prefix}}DatabaseGetOptionInt(db *C.struct_AdbcDatabase, key *C.cchar_t, 
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := cdb.db.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcDatabaseGetOptionInt: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	val, e := opts.GetOptionInt(C.GoString(key))
+	val, e := cdb.db.GetOptionInt(cdb.newContext(), C.GoString(key))
 	*value = C.int64_t(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
@@ -579,14 +559,13 @@ func {{.Prefix}}DatabaseInit(db *C.struct_AdbcDatabase, err *C.struct_AdbcError)
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	adb, aerr := drv.NewDatabase(cdb.opts)
+	adb, aerr := drv.NewDatabaseWithContext(cdb.newContext(), cdb.opts)
 	if aerr != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, aerr))
 	}
 
-	initLoggingFromEnv(adb)
-
-	cdb.db = adb
+	cdb.db = adb.(driverbase.Database)
+	initLoggingFromEnv(cdb.db)
 	return C.ADBC_STATUS_OK
 }
 
@@ -625,7 +604,7 @@ func {{.Prefix}}DatabaseRelease(db *C.struct_AdbcDatabase, err *C.struct_AdbcErr
 
 	cdb := h.Value().(*cDatabase)
 	if cdb.db != nil {
-		cdb.db.Close()
+		cdb.db.Close(cdb.newContext())
 		cdb.db = nil
 	}
 	cdb.opts = nil
@@ -658,12 +637,8 @@ func {{.Prefix}}DatabaseSetOption(db *C.struct_AdbcDatabase, key, value *C.cchar
 
 	k, v := C.GoString(key), C.GoString(value)
 	if cdb.db != nil {
-		opts, ok := cdb.db.(adbc.PostInitOptions)
-		if !ok {
-			setErr(err, "AdbcDatabaseSetOption: options are not supported")
-			return C.ADBC_STATUS_NOT_IMPLEMENTED
-		}
-		return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOption(k, v)))
+		e := cdb.db.SetOption(cdb.newContext(), k, v)
+		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	} else {
 		cdb.opts[k] = v
 	}
@@ -683,13 +658,8 @@ func {{.Prefix}}DatabaseSetOptionBytes(db *C.struct_AdbcDatabase, key *C.cchar_t
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := cdb.db.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcDatabaseSetOptionBytes: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionBytes(C.GoString(key), fromCArr[byte](value, int(length)))))
+        e := cdb.db.SetOptionBytes(cdb.newContext(), C.GoString(key), fromCArr[byte](value, int(length)))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}DatabaseSetOptionDouble
@@ -704,13 +674,8 @@ func {{.Prefix}}DatabaseSetOptionDouble(db *C.struct_AdbcDatabase, key *C.cchar_
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := cdb.db.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcDatabaseSetOptionDouble: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionDouble(C.GoString(key), float64(value))))
+	e := cdb.db.SetOptionDouble(cdb.newContext(), C.GoString(key), float64(value))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}DatabaseSetOptionInt
@@ -725,19 +690,14 @@ func {{.Prefix}}DatabaseSetOptionInt(db *C.struct_AdbcDatabase, key *C.cchar_t, 
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := cdb.db.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcDatabaseSetOptionInt: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionInt(C.GoString(key), int64(value))))
+	e := cdb.db.SetOptionInt(cdb.newContext(), C.GoString(key), int64(value))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 type cConn struct {
 	cancellableContext
 
-	cnxn     adbc.Connection
+	cnxn     driverbase.Connection
 	initArgs map[string]string
 }
 
@@ -782,16 +742,10 @@ func {{.Prefix}}ConnectionGetOption(db *C.struct_AdbcConnection, key *C.cchar_t,
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := conn.cnxn.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcConnectionGetOption: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-	val, e := opts.GetOption(C.GoString(key))
+	val, e := conn.cnxn.GetOption(conn.newContext(), C.GoString(key))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
-
 	return exportStringOption(val, value, length)
 }
 
@@ -807,16 +761,10 @@ func {{.Prefix}}ConnectionGetOptionBytes(db *C.struct_AdbcConnection, key *C.cch
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := conn.cnxn.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcConnectionGetOptionBytes: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-	val, e := opts.GetOptionBytes(C.GoString(key))
+	val, e := conn.cnxn.GetOptionBytes(conn.newContext(), C.GoString(key))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
-
 	return exportBytesOption(val, value, length)
 }
 
@@ -832,13 +780,7 @@ func {{.Prefix}}ConnectionGetOptionDouble(db *C.struct_AdbcConnection, key *C.cc
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := conn.cnxn.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcConnectionGetOptionDouble: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	val, e := opts.GetOptionDouble(C.GoString(key))
+	val, e := conn.cnxn.GetOptionDouble(conn.newContext(), C.GoString(key))
 	*value = C.double(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
@@ -855,13 +797,7 @@ func {{.Prefix}}ConnectionGetOptionInt(db *C.struct_AdbcConnection, key *C.cchar
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := conn.cnxn.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcConnectionGetOptionInt: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	val, e := opts.GetOptionInt(C.GoString(key))
+	val, e := conn.cnxn.GetOptionInt(conn.newContext(), C.GoString(key))
 	*value = C.int64_t(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
@@ -909,12 +845,8 @@ func {{.Prefix}}ConnectionSetOption(cnxn *C.struct_AdbcConnection, key, val *C.c
 		return C.ADBC_STATUS_OK
 	}
 
-	opts, ok := conn.cnxn.(adbc.PostInitOptions)
-	if !ok {
-		setErr(err, "AdbcConnectionSetOption: not supported post-init")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOption(C.GoString(key), C.GoString(val))))
+	e := conn.cnxn.SetOption(conn.newContext(), C.GoString(key), C.GoString(val))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}ConnectionSetOptionBytes
@@ -929,13 +861,8 @@ func {{.Prefix}}ConnectionSetOptionBytes(db *C.struct_AdbcConnection, key *C.cch
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := conn.cnxn.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcConnectionSetOptionBytes: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionBytes(C.GoString(key), fromCArr[byte](value, int(length)))))
+	e := conn.cnxn.SetOptionBytes(conn.newContext(), C.GoString(key), fromCArr[byte](value, int(length)))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}ConnectionSetOptionDouble
@@ -950,13 +877,8 @@ func {{.Prefix}}ConnectionSetOptionDouble(db *C.struct_AdbcConnection, key *C.cc
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := conn.cnxn.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcConnectionSetOptionDouble: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionDouble(C.GoString(key), float64(value))))
+	e := conn.cnxn.SetOptionDouble(conn.newContext(), C.GoString(key), float64(value))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}ConnectionSetOptionInt
@@ -971,13 +893,8 @@ func {{.Prefix}}ConnectionSetOptionInt(db *C.struct_AdbcConnection, key *C.cchar
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := conn.cnxn.(adbc.GetSetOptions)
-	if !ok {
-		setErr(err, "AdbcConnectionSetOptionInt: options are not supported")
-		return C.ADBC_STATUS_NOT_IMPLEMENTED
-	}
-
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionInt(C.GoString(key), int64(value))))
+	e := conn.cnxn.SetOptionInt(conn.newContext(), C.GoString(key), int64(value))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}ConnectionInit
@@ -1004,18 +921,13 @@ func {{.Prefix}}ConnectionInit(cnxn *C.struct_AdbcConnection, db *C.struct_AdbcD
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
-	conn.cnxn = c
+	conn.cnxn = c.(driverbase.Connection)
 
 	if len(conn.initArgs) > 0 {
 		// C allow SetOption before Init, Go doesn't allow options to Open so set them now
-		opts, ok := conn.cnxn.(adbc.PostInitOptions)
-		if !ok {
-			setErr(err, "AdbcConnectionInit: options are not supported")
-			return C.ADBC_STATUS_NOT_IMPLEMENTED
-		}
-
+		ctx := conn.newContext()
 		for k, v := range conn.initArgs {
-			rawCode := errToAdbcErr(err, opts.SetOption(k, v))
+			rawCode := errToAdbcErr(err, conn.cnxn.SetOption(ctx, k, v))
 			if rawCode != adbc.StatusOK {
 				return C.AdbcStatusCode(rawCode)
 			}
@@ -1056,7 +968,7 @@ func {{.Prefix}}ConnectionRelease(cnxn *C.struct_AdbcConnection, err *C.struct_A
 	if conn.cnxn == nil {
 		return C.ADBC_STATUS_OK
 	}
-	return C.AdbcStatusCode(errToAdbcErr(err, conn.cnxn.Close()))
+	return C.AdbcStatusCode(errToAdbcErr(err, conn.cnxn.Close(conn.newContext())))
 }
 
 func fromCArr[T, CType any](ptr *CType, sz int) []T {
@@ -1314,7 +1226,8 @@ func {{.Prefix}}ConnectionRollback(cnxn *C.struct_AdbcConnection, err *C.struct_
 type cStmt struct {
 	cancellableContext
 
-	stmt adbc.Statement
+	// TODO(lidavidm): assume driverbase.Statement here to avoid casts below
+	stmt adbc.StatementWithContext
 }
 
 func checkStmtAlloc(stmt *C.struct_AdbcStatement, err *C.struct_AdbcError, fname string) bool {
@@ -1357,16 +1270,15 @@ func {{.Prefix}}StatementGetOption(db *C.struct_AdbcStatement, key *C.cchar_t, v
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := st.stmt.(adbc.GetSetOptions)
+	opts, ok := st.stmt.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcStatementGetOption: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
-	val, e := opts.GetOption(C.GoString(key))
+	val, e := opts.GetOption(st.newContext(), C.GoString(key))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
-
 	return exportStringOption(val, value, length)
 }
 
@@ -1382,16 +1294,15 @@ func {{.Prefix}}StatementGetOptionBytes(db *C.struct_AdbcStatement, key *C.cchar
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := st.stmt.(adbc.GetSetOptions)
+	opts, ok := st.stmt.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcStatementGetOptionBytes: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
-	val, e := opts.GetOptionBytes(C.GoString(key))
+	val, e := opts.GetOptionBytes(st.newContext(), C.GoString(key))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
-
 	return exportBytesOption(val, value, length)
 }
 
@@ -1407,13 +1318,13 @@ func {{.Prefix}}StatementGetOptionDouble(db *C.struct_AdbcStatement, key *C.ccha
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := st.stmt.(adbc.GetSetOptions)
+	opts, ok := st.stmt.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcStatementGetOptionDouble: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
-	val, e := opts.GetOptionDouble(C.GoString(key))
+	val, e := opts.GetOptionDouble(st.newContext(), C.GoString(key))
 	*value = C.double(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
@@ -1430,13 +1341,13 @@ func {{.Prefix}}StatementGetOptionInt(db *C.struct_AdbcStatement, key *C.cchar_t
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := st.stmt.(adbc.GetSetOptions)
+	opts, ok := st.stmt.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcStatementGetOptionInt: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
-	val, e := opts.GetOptionInt(C.GoString(key))
+	val, e := opts.GetOptionInt(st.newContext(), C.GoString(key))
 	*value = C.int64_t(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
@@ -1462,7 +1373,7 @@ func {{.Prefix}}StatementNew(cnxn *C.struct_AdbcConnection, stmt *C.struct_AdbcS
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	st, e := conn.cnxn.NewStatement()
+	st, e := conn.cnxn.NewStatement(conn.newContext())
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
@@ -1506,7 +1417,7 @@ func {{.Prefix}}StatementRelease(stmt *C.struct_AdbcStatement, err *C.struct_Adb
 	if st.stmt == nil {
 		return C.ADBC_STATUS_OK
 	}
-	return C.AdbcStatusCode(errToAdbcErr(err, st.stmt.Close()))
+	return C.AdbcStatusCode(errToAdbcErr(err, st.stmt.Close(st.newContext())))
 }
 
 //export {{.Prefix}}StatementCancel
@@ -1616,7 +1527,8 @@ func {{.Prefix}}StatementSetSqlQuery(stmt *C.struct_AdbcStatement, query *C.ccha
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	return C.AdbcStatusCode(errToAdbcErr(err, st.stmt.SetSqlQuery(C.GoString(query))))
+	e := st.stmt.SetSqlQuery(st.newContext(), C.GoString(query))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}StatementSetSubstraitPlan
@@ -1631,7 +1543,8 @@ func {{.Prefix}}StatementSetSubstraitPlan(stmt *C.struct_AdbcStatement, plan *C.
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	return C.AdbcStatusCode(errToAdbcErr(err, st.stmt.SetSubstraitPlan(fromCArr[byte](plan, int(length)))))
+        e := st.stmt.SetSubstraitPlan(st.newContext(), fromCArr[byte](plan, int(length)))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}StatementBind
@@ -1653,8 +1566,8 @@ func {{.Prefix}}StatementBind(stmt *C.struct_AdbcStatement, values *C.struct_Arr
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
 	defer rec.Release()
-
-	return C.AdbcStatusCode(errToAdbcErr(err, st.stmt.Bind(st.newContext(), rec)))
+	e = st.stmt.Bind(st.newContext(), rec)
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}StatementBindStream
@@ -1673,7 +1586,8 @@ func {{.Prefix}}StatementBindStream(stmt *C.struct_AdbcStatement, stream *C.stru
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
-	return C.AdbcStatusCode(errToAdbcErr(err, st.stmt.BindStream(st.newContext(), rdr.(array.RecordReader))))
+	e = st.stmt.BindStream(st.newContext(), rdr.(array.RecordReader))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}StatementGetParameterSchema
@@ -1688,11 +1602,10 @@ func {{.Prefix}}StatementGetParameterSchema(stmt *C.struct_AdbcStatement, schema
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	sc, e := st.stmt.GetParameterSchema()
+	sc, e := st.stmt.GetParameterSchema(st.newContext())
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
-
 	cdata.ExportArrowSchema(sc, toCdataSchema(schema))
 	return C.ADBC_STATUS_OK
 }
@@ -1709,7 +1622,8 @@ func {{.Prefix}}StatementSetOption(stmt *C.struct_AdbcStatement, key, value *C.c
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	return C.AdbcStatusCode(errToAdbcErr(err, st.stmt.SetOption(C.GoString(key), C.GoString(value))))
+        e := st.stmt.SetOption(st.newContext(), C.GoString(key), C.GoString(value))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}StatementSetOptionBytes
@@ -1724,13 +1638,14 @@ func {{.Prefix}}StatementSetOptionBytes(db *C.struct_AdbcStatement, key *C.cchar
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := st.stmt.(adbc.GetSetOptions)
+	opts, ok := st.stmt.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcStatementSetOptionBytes: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionBytes(C.GoString(key), fromCArr[byte](value, int(length)))))
+        e := opts.SetOptionBytes(st.newContext(), C.GoString(key), fromCArr[byte](value, int(length)))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}StatementSetOptionDouble
@@ -1745,13 +1660,14 @@ func {{.Prefix}}StatementSetOptionDouble(db *C.struct_AdbcStatement, key *C.ccha
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := st.stmt.(adbc.GetSetOptions)
+	opts, ok := st.stmt.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcStatementSetOptionDouble: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionDouble(C.GoString(key), float64(value))))
+        e := opts.SetOptionDouble(st.newContext(), C.GoString(key), float64(value))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export {{.Prefix}}StatementSetOptionInt
@@ -1766,13 +1682,14 @@ func {{.Prefix}}StatementSetOptionInt(db *C.struct_AdbcStatement, key *C.cchar_t
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	opts, ok := st.stmt.(adbc.GetSetOptions)
+	opts, ok := st.stmt.(adbc.GetSetOptionsWithContext)
 	if !ok {
 		setErr(err, "AdbcStatementSetOptionInt: options are not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
-	return C.AdbcStatusCode(errToAdbcErr(err, opts.SetOptionInt(C.GoString(key), int64(value))))
+        e := opts.SetOptionInt(st.newContext(), C.GoString(key), int64(value))
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export releasePartitions
