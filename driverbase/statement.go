@@ -27,6 +27,8 @@ import (
 	"strings"
 
 	"github.com/apache/arrow-adbc/go/adbc"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -38,9 +40,9 @@ const (
 )
 
 type StatementImpl interface {
-	adbc.Statement
+	adbc.StatementWithContext
 	adbc.StatementExecuteSchema
-	adbc.GetSetOptions
+	adbc.GetSetOptionsWithContext
 	adbc.OTelTracing
 	Base() *StatementImplBase
 }
@@ -54,8 +56,8 @@ type StatementImplBase struct {
 }
 
 type Statement interface {
-	adbc.Statement
-	adbc.GetSetOptions
+	adbc.StatementWithContext
+	adbc.GetSetOptionsWithContext
 }
 
 type statement struct {
@@ -70,13 +72,63 @@ func NewStatementImplBase(cnxn *ConnectionImplBase, errorHelper ErrorHelper) Sta
 	}
 }
 
-func NewStatement(impl StatementImpl) Statement {
+func NewStatement(impl StatementImpl) adbc.StatementWithContext {
 	return &statement{
 		StatementImpl: impl,
 	}
 }
 
-func (st *StatementImplBase) SetOption(key, value string) error {
+func (st *StatementImplBase) Base() *StatementImplBase {
+	return st
+}
+
+func (st *StatementImplBase) Close(ctx context.Context) error {
+	return nil
+}
+
+func (st *StatementImplBase) Bind(ctx context.Context, values arrow.RecordBatch) error {
+	defer values.Release()
+	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "bind")
+}
+
+func (st *StatementImplBase) BindStream(ctx context.Context, stream array.RecordReader) error {
+	defer stream.Release()
+	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "bind stream")
+}
+
+func (st *StatementImplBase) SetSqlQuery(ctx context.Context, query string) error {
+	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "set sql query")
+}
+
+func (st *StatementImplBase) SetSubstraitPlan(ctx context.Context, plan []byte) error {
+	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "set substrait plan")
+}
+
+func (st *StatementImplBase) GetParameterSchema(ctx context.Context) (*arrow.Schema, error) {
+	return nil, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "get parameter schema")
+}
+
+func (st *StatementImplBase) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
+	return nil, -1, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "execute query")
+}
+
+func (st *StatementImplBase) ExecuteUpdate(ctx context.Context) (int64, error) {
+	return -1, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "execute update")
+}
+
+func (st *StatementImplBase) Prepare(ctx context.Context) error {
+	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "prepare")
+}
+
+func (st *StatementImplBase) ExecutePartitions(ctx context.Context) (*arrow.Schema, adbc.Partitions, int64, error) {
+	return nil, adbc.Partitions{}, -1, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "execute partitions")
+}
+
+func (st *StatementImplBase) ExecuteSchema(context.Context) (*arrow.Schema, error) {
+	return nil, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "execute schema")
+}
+
+func (st *StatementImplBase) SetOption(ctx context.Context, key, value string) error {
 	switch strings.ToLower(key) {
 	case adbc.OptionKeyTelemetryTraceParent:
 		st.SetTraceParent(strings.TrimSpace(value))
@@ -85,19 +137,19 @@ func (st *StatementImplBase) SetOption(key, value string) error {
 	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
-func (st *StatementImplBase) SetOptionBytes(key string, value []byte) error {
+func (st *StatementImplBase) SetOptionBytes(ctx context.Context, key string, value []byte) error {
 	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
-func (st *StatementImplBase) SetOptionInt(key string, value int64) error {
+func (st *StatementImplBase) SetOptionInt(ctx context.Context, key string, value int64) error {
 	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
-func (st *StatementImplBase) SetOptionDouble(key string, value float64) error {
+func (st *StatementImplBase) SetOptionDouble(ctx context.Context, key string, value float64) error {
 	return st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
-func (st *StatementImplBase) GetOption(key string) (string, error) {
+func (st *StatementImplBase) GetOption(ctx context.Context, key string) (string, error) {
 	switch strings.ToLower(key) {
 	case adbc.OptionKeyTelemetryTraceParent:
 		return st.GetTraceParent(), nil
@@ -105,15 +157,15 @@ func (st *StatementImplBase) GetOption(key string) (string, error) {
 	return "", st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
-func (st *StatementImplBase) GetOptionBytes(key string) ([]byte, error) {
+func (st *StatementImplBase) GetOptionBytes(ctx context.Context, key string) ([]byte, error) {
 	return nil, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
-func (st *StatementImplBase) GetOptionInt(key string) (int64, error) {
+func (st *StatementImplBase) GetOptionInt(ctx context.Context, key string) (int64, error) {
 	return 0, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
-func (st *StatementImplBase) GetOptionDouble(key string) (float64, error) {
+func (st *StatementImplBase) GetOptionDouble(ctx context.Context, key string) (float64, error) {
 	return 0, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
@@ -137,3 +189,6 @@ func (st *StatementImplBase) StartSpan(
 func (st *StatementImplBase) GetInitialSpanAttributes() []attribute.KeyValue {
 	return st.cnxn.GetInitialSpanAttributes()
 }
+
+var _ StatementImpl = (*StatementImplBase)(nil)
+var _ Statement = (*statement)(nil)

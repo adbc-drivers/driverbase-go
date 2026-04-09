@@ -50,7 +50,7 @@ const (
 // NewDriver creates a new adbc.Driver for testing. In addition to a memory.Allocator, it takes
 // a slog.Handler to use for all structured logging as well as a useHelpers flag to determine whether
 // the test should register helper methods or use the default driverbase implementation.
-func NewDriver(alloc memory.Allocator, handler slog.Handler, useHelpers bool) adbc.Driver {
+func NewDriver(alloc memory.Allocator, handler slog.Handler, useHelpers bool) driverbase.DriverWithContext {
 	info := driverbase.DefaultDriverInfo("MockDriver")
 	_ = info.RegisterInfoCode(adbc.InfoCode(10_001), "my custom info")
 	return driverbase.NewDriver(&driverImpl{DriverImplBase: driverbase.NewDriverImplBase(info, alloc), handler: handler, useHelpers: useHelpers})
@@ -66,13 +66,13 @@ func TestDefaultDriver(t *testing.T) {
 
 	drv := NewDriver(alloc, &handler, false) // Do not use helper implementations; only default behavior
 
-	db, err := drv.NewDatabase(nil)
+	db, err := drv.NewDatabaseWithContext(ctx, nil)
 	require.NoError(t, err)
-	defer testutil.CheckedClose(t, db)
+	defer testutil.CheckedCloseWithContext(t, db, ctx)
 
-	require.NoError(t, db.SetOptions(map[string]string{OptionKeyRecognized: "should-pass"}))
+	require.NoError(t, db.SetOptions(ctx, map[string]string{OptionKeyRecognized: "should-pass"}))
 
-	err = db.SetOptions(map[string]string{OptionKeyUnrecognized: "should-fail"})
+	err = db.SetOptions(ctx, map[string]string{OptionKeyUnrecognized: "should-fail"})
 	require.Error(t, err)
 	require.Equal(t, "Not Implemented: [MockDriver] Unknown database option 'unrecognized'", err.Error())
 
@@ -80,8 +80,8 @@ func TestDefaultDriver(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		// Cannot close more than once
-		require.NoError(t, cnxn.Close())
-		require.Error(t, cnxn.Close())
+		require.NoError(t, cnxn.Close(ctx))
+		require.Error(t, cnxn.Close(ctx))
 	}()
 
 	err = cnxn.Commit(ctx)
@@ -146,19 +146,19 @@ func TestDefaultDriver(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, "Not Implemented: [MockDriver] GetTableTypes", err.Error())
 
-	autocommit, err := cnxn.(adbc.GetSetOptions).GetOption(adbc.OptionKeyAutoCommit)
+	autocommit, err := cnxn.(adbc.GetSetOptionsWithContext).GetOption(ctx, adbc.OptionKeyAutoCommit)
 	require.NoError(t, err)
 	require.Equal(t, adbc.OptionValueEnabled, autocommit)
 
-	err = cnxn.(adbc.GetSetOptions).SetOption(adbc.OptionKeyAutoCommit, "false")
+	err = cnxn.(adbc.GetSetOptionsWithContext).SetOption(ctx, adbc.OptionKeyAutoCommit, "false")
 	require.Error(t, err)
 	require.Equal(t, "Not Implemented: [MockDriver] Unsupported connection option 'adbc.connection.autocommit'", err.Error())
 
-	_, err = cnxn.(adbc.GetSetOptions).GetOption(adbc.OptionKeyCurrentCatalog)
+	_, err = cnxn.(adbc.GetSetOptionsWithContext).GetOption(ctx, adbc.OptionKeyCurrentCatalog)
 	require.Error(t, err)
 	require.Equal(t, "Not Found: [MockDriver] Unknown connection option 'adbc.connection.catalog'", err.Error())
 
-	err = cnxn.(adbc.GetSetOptions).SetOption(adbc.OptionKeyCurrentCatalog, "test_catalog")
+	err = cnxn.(adbc.GetSetOptionsWithContext).SetOption(ctx, adbc.OptionKeyCurrentCatalog, "test_catalog")
 	require.Error(t, err)
 	require.Equal(t, "Not Implemented: [MockDriver] Unknown connection option 'adbc.connection.catalog'", err.Error())
 
@@ -197,19 +197,19 @@ func TestCustomizedDriver(t *testing.T) {
 
 	drv := NewDriver(alloc, &handler, true) // Use helper implementations
 
-	db, err := drv.NewDatabase(nil)
+	db, err := drv.NewDatabaseWithContext(ctx, nil)
 	require.NoError(t, err)
-	defer testutil.CheckedClose(t, db)
+	defer testutil.CheckedCloseWithContext(t, db, ctx)
 
-	require.NoError(t, db.SetOptions(map[string]string{OptionKeyRecognized: "should-pass"}))
+	require.NoError(t, db.SetOptions(ctx, map[string]string{OptionKeyRecognized: "should-pass"}))
 
-	err = db.SetOptions(map[string]string{OptionKeyUnrecognized: "should-fail"})
+	err = db.SetOptions(ctx, map[string]string{OptionKeyUnrecognized: "should-fail"})
 	require.Error(t, err)
 	require.Equal(t, "Not Implemented: [MockDriver] Unknown database option 'unrecognized'", err.Error())
 
 	cnxn, err := db.Open(ctx)
 	require.NoError(t, err)
-	defer testutil.CheckedClose(t, cnxn)
+	defer testutil.CheckedCloseWithContext(t, cnxn, ctx)
 
 	err = cnxn.Commit(ctx)
 	require.Error(t, err)
@@ -376,12 +376,12 @@ func TestCustomizedDriver(t *testing.T) {
 
 	require.Truef(t, array.TableEqual(expectedTableTypesTable, tableTypeTable), "expected: %s\ngot: %s", expectedTableTypesTable, tableTypeTable)
 
-	autocommit, err := cnxn.(adbc.GetSetOptions).GetOption(adbc.OptionKeyAutoCommit)
+	autocommit, err := cnxn.(adbc.GetSetOptionsWithContext).GetOption(ctx, adbc.OptionKeyAutoCommit)
 	require.NoError(t, err)
 	require.Equal(t, adbc.OptionValueEnabled, autocommit)
 
 	// By implementing AutocommitSetter, we are able to successfully toggle autocommit
-	err = cnxn.(adbc.GetSetOptions).SetOption(adbc.OptionKeyAutoCommit, "false")
+	err = cnxn.(adbc.GetSetOptionsWithContext).SetOption(ctx, adbc.OptionKeyAutoCommit, "false")
 	require.NoError(t, err)
 
 	// We haven't implemented Commit, but we get NotImplemented instead of InvalidState because
@@ -393,25 +393,25 @@ func TestCustomizedDriver(t *testing.T) {
 	// By implementing CurrentNamespacer, we can now get/set the current catalog/dbschema
 	// Default current(catalog|dbSchema) is driver-specific, but the stub implementation falls back
 	// to a 'not found' error instead of 'not implemented'
-	_, err = cnxn.(adbc.GetSetOptions).GetOption(adbc.OptionKeyCurrentCatalog)
+	_, err = cnxn.(adbc.GetSetOptionsWithContext).GetOption(ctx, adbc.OptionKeyCurrentCatalog)
 	require.Error(t, err)
 	require.Equal(t, "Not Found: [MockDriver] failed to get current catalog: current catalog is not set", err.Error())
 
-	err = cnxn.(adbc.GetSetOptions).SetOption(adbc.OptionKeyCurrentCatalog, "test_catalog")
+	err = cnxn.(adbc.GetSetOptionsWithContext).SetOption(ctx, adbc.OptionKeyCurrentCatalog, "test_catalog")
 	require.NoError(t, err)
 
-	currentCatalog, err := cnxn.(adbc.GetSetOptions).GetOption(adbc.OptionKeyCurrentCatalog)
+	currentCatalog, err := cnxn.(adbc.GetSetOptionsWithContext).GetOption(ctx, adbc.OptionKeyCurrentCatalog)
 	require.NoError(t, err)
 	require.Equal(t, "test_catalog", currentCatalog)
 
-	_, err = cnxn.(adbc.GetSetOptions).GetOption(adbc.OptionKeyCurrentDbSchema)
+	_, err = cnxn.(adbc.GetSetOptionsWithContext).GetOption(ctx, adbc.OptionKeyCurrentDbSchema)
 	require.Error(t, err)
 	require.Equal(t, "Not Found: [MockDriver] failed to get current db schema: current db schema is not set", err.Error())
 
-	err = cnxn.(adbc.GetSetOptions).SetOption(adbc.OptionKeyCurrentDbSchema, "test_schema")
+	err = cnxn.(adbc.GetSetOptionsWithContext).SetOption(ctx, adbc.OptionKeyCurrentDbSchema, "test_schema")
 	require.NoError(t, err)
 
-	currentDbSchema, err := cnxn.(adbc.GetSetOptions).GetOption(adbc.OptionKeyCurrentDbSchema)
+	currentDbSchema, err := cnxn.(adbc.GetSetOptionsWithContext).GetOption(ctx, adbc.OptionKeyCurrentDbSchema)
 	require.NoError(t, err)
 	require.Equal(t, "test_schema", currentDbSchema)
 
@@ -449,11 +449,7 @@ type driverImpl struct {
 	useHelpers bool
 }
 
-func (drv *driverImpl) NewDatabase(opts map[string]string) (adbc.Database, error) {
-	return drv.NewDatabaseWithContext(context.Background(), opts)
-}
-
-func (drv *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
+func (drv *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.DatabaseWithContext, error) {
 	dbBase, err := driverbase.NewDatabaseImplBase(ctx, &drv.DriverImplBase)
 	if err != nil {
 		return nil, err
@@ -475,10 +471,9 @@ type databaseImpl struct {
 	useHelpers bool
 }
 
-// SetOptions implements adbc.Database.
-func (d *databaseImpl) SetOptions(options map[string]string) error {
+func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
 	for k, v := range options {
-		if err := d.SetOption(k, v); err != nil {
+		if err := d.SetOption(ctx, k, v); err != nil {
 			return err
 		}
 	}
@@ -487,16 +482,16 @@ func (d *databaseImpl) SetOptions(options map[string]string) error {
 
 // Only need to implement keys we recognize.
 // Any other values will fallthrough to default failure message.
-func (d *databaseImpl) SetOption(key, value string) error {
+func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 	switch key {
 	case OptionKeyRecognized:
 		_ = value // pretend to recognize the setting
 		return nil
 	}
-	return d.DatabaseImplBase.SetOption(key, value)
+	return d.DatabaseImplBase.SetOption(ctx, key, value)
 }
 
-func (db *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
+func (db *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
 	db.Logger.Info("Opening a new connection", "withHelpers", db.useHelpers)
 	cnxn := &connectionImpl{ConnectionImplBase: driverbase.NewConnectionImplBase(&db.DatabaseImplBase), db: db}
 	bldr := driverbase.NewConnectionBuilder(cnxn)
@@ -521,7 +516,7 @@ type connectionImpl struct {
 	currentDbSchema string
 }
 
-func (c *connectionImpl) NewStatement() (adbc.Statement, error) {
+func (c *connectionImpl) NewStatement(ctx context.Context) (adbc.StatementWithContext, error) {
 	stmt := &statement{
 		StatementImplBase: driverbase.NewStatementImplBase(c.Base(), c.ErrorHelper),
 		cnxn:              c,
@@ -532,54 +527,6 @@ func (c *connectionImpl) NewStatement() (adbc.Statement, error) {
 type statement struct {
 	driverbase.StatementImplBase
 	cnxn *connectionImpl
-}
-
-func (base *statement) Base() *driverbase.StatementImplBase {
-	return &base.StatementImplBase
-}
-
-func (base *statement) Bind(ctx context.Context, values arrow.RecordBatch) error {
-	return base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "Bind")
-}
-
-func (base *statement) BindStream(ctx context.Context, stream array.RecordReader) error {
-	return base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "BindStream")
-}
-
-func (base *statement) Close() error {
-	return base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "Close")
-}
-
-func (base *statement) ExecutePartitions(ctx context.Context) (*arrow.Schema, adbc.Partitions, int64, error) {
-	return nil, adbc.Partitions{}, 0, base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "ExecutePartitions")
-}
-
-func (base *statement) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
-	return nil, 0, base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "ExecuteQuery")
-}
-
-func (base *statement) ExecuteSchema(ctx context.Context) (*arrow.Schema, error) {
-	return nil, base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "ExecuteSchema")
-}
-
-func (base *statement) ExecuteUpdate(ctx context.Context) (int64, error) {
-	return 0, base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "ExecuteUpdate")
-}
-
-func (base *statement) GetParameterSchema() (*arrow.Schema, error) {
-	return nil, base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "GetParameterSchema")
-}
-
-func (base *statement) Prepare(ctx context.Context) error {
-	return base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "Prepare")
-}
-
-func (base *statement) SetSqlQuery(query string) error {
-	return base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "SetSqlQuery")
-}
-
-func (base statement) SetSubstraitPlan(plan []byte) error {
-	return base.Base().ErrorHelper.Errorf(adbc.StatusNotImplemented, "SetSubstraitPlan")
 }
 
 var dbObjects = map[string]map[string][]driverbase.TableInfo{
@@ -677,32 +624,32 @@ func (c *connectionImpl) GetTablesForDBSchema(ctx context.Context, catalog strin
 	return tables, nil
 }
 
-func (c *connectionImpl) SetAutocommit(enabled bool) error {
+func (c *connectionImpl) SetAutocommit(ctx context.Context, enabled bool) error {
 	c.Base().Logger.Debug("SetAutocommit", "enabled", enabled)
 	return nil
 }
 
-func (c *connectionImpl) GetCurrentCatalog() (string, error) {
+func (c *connectionImpl) GetCurrentCatalog(ctx context.Context) (string, error) {
 	if c.currentCatalog == "" {
 		return "", fmt.Errorf("current catalog is not set")
 	}
 	return c.currentCatalog, nil
 }
 
-func (c *connectionImpl) GetCurrentDbSchema() (string, error) {
+func (c *connectionImpl) GetCurrentDbSchema(ctx context.Context) (string, error) {
 	if c.currentDbSchema == "" {
 		return "", fmt.Errorf("current db schema is not set")
 	}
 	return c.currentDbSchema, nil
 }
 
-func (c *connectionImpl) SetCurrentCatalog(val string) error {
+func (c *connectionImpl) SetCurrentCatalog(ctx context.Context, val string) error {
 	c.Base().Logger.Debug("SetCurrentCatalog", "val", val)
 	c.currentCatalog = val
 	return nil
 }
 
-func (c *connectionImpl) SetCurrentDbSchema(val string) error {
+func (c *connectionImpl) SetCurrentDbSchema(ctx context.Context, val string) error {
 	c.Base().Logger.Debug("SetCurrentDbSchema", "val", val)
 	c.currentDbSchema = val
 	return nil
