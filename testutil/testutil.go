@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"testing"
@@ -29,6 +30,18 @@ import (
 // See: https://github.com/stretchr/testify/issues/1067
 func CheckedClose(t *testing.T, obj io.Closer) {
 	if err := obj.Close(); err != nil {
+		t.Errorf("Failed to close object of type %T: %s", obj, err)
+	}
+}
+
+type CloserWithContext interface {
+	Close(ctx context.Context) error
+}
+
+// CheckedCloseWithContext validates that a deferred Close call did not fail.
+// See: https://github.com/stretchr/testify/issues/1067
+func CheckedCloseWithContext(t *testing.T, obj CloserWithContext, ctx context.Context) {
+	if err := obj.Close(ctx); err != nil {
 		t.Errorf("Failed to close object of type %T: %s", obj, err)
 	}
 }

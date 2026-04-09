@@ -57,15 +57,14 @@ func init() {
 // DriverImpl is an interface that drivers implement to provide
 // vendor-specific functionality.
 type DriverImpl interface {
-	adbc.Driver
-	adbc.DriverWithContext
+	DriverWithContext
 	Base() *DriverImplBase
 }
 
 // Driver is the interface satisfied by the result of the NewDriver constructor,
 // given an input is provided satisfying the DriverImpl interface.
 type Driver interface {
-	adbc.Driver
+	DriverWithContext
 }
 
 // DriverImplBase is a struct that provides default implementations of the
@@ -78,11 +77,7 @@ type DriverImplBase struct {
 	Logger      *slog.Logger
 }
 
-func (base *DriverImplBase) NewDatabase(opts map[string]string) (adbc.Database, error) {
-	return nil, base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "NewDatabase")
-}
-
-func (base *DriverImplBase) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
+func (base *DriverImplBase) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.DatabaseWithContext, error) {
 	return nil, base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "NewDatabaseWithContext")
 }
 
@@ -137,3 +132,4 @@ func NewDriver(impl DriverImpl) Driver {
 }
 
 var _ DriverImpl = (*DriverImplBase)(nil)
+var _ Driver = (*driver)(nil)

@@ -90,12 +90,6 @@ func (d *Driver) WithErrorInspector(inspector driverbase.ErrorInspector) *Driver
 	return d
 }
 
-// NewDatabase is the main entrypoint for driver‐agnostic ADBC database creation.
-// It uses the driver name provided to NewDriver and expects opts[adbc.OptionKeyURI] to be the DSN/URI.
-func (d *Driver) NewDatabase(opts map[string]string) (adbc.Database, error) {
-	return d.NewDatabaseWithContext(context.Background(), opts)
-}
-
 // databaseImpl implements the ADBC Database interface on top of database/sql.
 type databaseImpl struct {
 	driverbase.DatabaseImplBase
@@ -108,8 +102,9 @@ type databaseImpl struct {
 	connectionFactory ConnectionFactory
 }
 
-// NewDatabaseWithContext is the same, but lets you pass in a context.
-func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
+// NewDatabaseWithContext is the main entrypoint for driver‐agnostic ADBC database creation.
+// It uses the driver name provided to NewDriver and expects opts[adbc.OptionKeyURI] to be the DSN/URI.
+func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.DatabaseWithContext, error) {
 	base, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase)
 	if err != nil {
 		return nil, d.ErrorHelper.WrapIO(err, "failed to initialize database base")
@@ -142,11 +137,11 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 }
 
 // Open creates a new ADBC Connection (session) by acquiring a *sql.Conn.
-func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
+func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
 	return newConnection(ctx, d)
 }
 
 // Closes the database and its underlying connection pool.
-func (d *databaseImpl) Close() error {
+func (d *databaseImpl) Close(ctx context.Context) error {
 	return d.db.Close()
 }

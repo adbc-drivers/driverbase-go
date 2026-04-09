@@ -51,7 +51,7 @@ type ConnectionImplBase struct {
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
-func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, error) {
+func newConnection(ctx context.Context, db *databaseImpl) (adbc.ConnectionWithContext, error) {
 	// Acquire a dedicated session
 	sqlConn, err := db.db.Conn(ctx)
 	if err != nil {
@@ -111,7 +111,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.Connection, erro
 }
 
 // NewStatement satisfies adbc.Connection
-func (c *ConnectionImplBase) NewStatement() (adbc.Statement, error) {
+func (c *ConnectionImplBase) NewStatement(ctx context.Context) (adbc.StatementWithContext, error) {
 	return newStatement(c), nil
 }
 
@@ -121,12 +121,12 @@ func (c *ConnectionImplBase) SetTypeConverter(converter TypeConverter) {
 }
 
 // SetOption sets a string option on this connection
-func (c *ConnectionImplBase) SetOption(key, value string) error {
-	return c.ConnectionImplBase.SetOption(key, value)
+func (c *ConnectionImplBase) SetOption(ctx context.Context, key, value string) error {
+	return c.ConnectionImplBase.SetOption(ctx, key, value)
 }
 
-func (c *ConnectionImplBase) GetOption(key string) (string, error) {
-	return c.ConnectionImplBase.GetOption(key)
+func (c *ConnectionImplBase) GetOption(ctx context.Context, key string) (string, error) {
+	return c.ConnectionImplBase.GetOption(ctx, key)
 }
 
 // Commit is a no-op under auto-commit mode
@@ -150,7 +150,7 @@ func (c *ConnectionImplBase) Rollback(ctx context.Context) error {
 }
 
 // Close closes the underlying SQL connection
-func (c *ConnectionImplBase) Close() error {
+func (c *ConnectionImplBase) Close(ctx context.Context) error {
 	if err := c.ClearPending(); err != nil {
 		return errors.Join(err, c.Conn.Close())
 	}

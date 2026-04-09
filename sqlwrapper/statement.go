@@ -80,7 +80,7 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 }
 
 // newStatement constructs a new StatementImpl wrapped by driverbase
-func newStatement(c *ConnectionImplBase) adbc.Statement {
+func newStatement(c *ConnectionImplBase) adbc.StatementWithContext {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: base,
@@ -93,7 +93,7 @@ func newStatement(c *ConnectionImplBase) adbc.Statement {
 }
 
 // SetSqlQuery stores the SQL text on the statement
-func (s *statementImpl) SetSqlQuery(query string) error {
+func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
 	if err := s.connectionImpl.ClearPending(); err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (s *statementImpl) SetSqlQuery(query string) error {
 }
 
 // SetOption sets a string option on this statement
-func (s *statementImpl) SetOption(key, val string) error {
+func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 	// Let driverbase handle standard bulk ingest options first
 	if handled, err := s.bulkIngestOptions.SetOption(&s.Base().ErrorHelper, key, val); err != nil {
 		return err
@@ -314,7 +314,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 }
 
 // Close shuts down the prepared stmt (if any) and releases bound resources
-func (s *statementImpl) Close() error {
+func (s *statementImpl) Close(ctx context.Context) error {
 	// Check if already closed
 	if s.closed {
 		return s.Base().ErrorHelper.InvalidState("statement already closed")
@@ -334,20 +334,7 @@ func (s *statementImpl) Close() error {
 			return s.Base().ErrorHelper.WrapIO(err, "failed to close prepared statement")
 		}
 	}
-	return nil
-}
-
-// ExecutePartitions handles partitioned execution; not supported here
-func (s *statementImpl) ExecutePartitions(context.Context) (*arrow.Schema, adbc.Partitions, int64, error) {
-	err := s.Base().ErrorHelper.NotImplemented("ExecutePartitions not supported")
-	return nil, adbc.Partitions{}, 0, err
-}
-
-// GetParameterSchema returns the schema for query parameters.
-// This is not supported because parameter syntax varies between databases and database/sql
-// doesn't provide parameter introspection.
-func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
-	return nil, s.Base().ErrorHelper.NotImplemented("GetParameterSchema not supported - parameter introspection varies by database")
+	return s.StatementImplBase.Close(ctx)
 }
 
 func (s *statementImpl) Prepare(ctx context.Context) (err error) {
@@ -381,11 +368,6 @@ func (s *statementImpl) SetBatchSize(size int) error {
 	}
 	s.batchSize = size
 	return nil
-}
-
-// SetSubstraitPlan sets the Substrait plan on the statement; not supported here.
-func (s *statementImpl) SetSubstraitPlan([]byte) error {
-	return s.Base().ErrorHelper.NotImplemented("SetSubstraitPlan not supported")
 }
 
 // executeBulkUpdate executes bulk updates by iterating through the bound stream directly

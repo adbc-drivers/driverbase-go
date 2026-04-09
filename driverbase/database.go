@@ -87,16 +87,16 @@ var getExporterName = sync.OnceValue(func() string {
 // DatabaseImpl is an interface that drivers implement to provide
 // vendor-specific functionality.
 type DatabaseImpl interface {
-	adbc.Database
-	adbc.GetSetOptions
+	adbc.DatabaseWithContext
+	adbc.GetSetOptionsWithContext
 	Base() *DatabaseImplBase
 }
 
 // Database is the interface satisfied by the result of the NewDatabase constructor,
 // given an input is provided satisfying the DatabaseImpl interface.
 type Database interface {
-	adbc.Database
-	adbc.GetSetOptions
+	adbc.DatabaseWithContext
+	adbc.GetSetOptionsWithContext
 	adbc.DatabaseLogging
 	adbc.OTelTracingInit
 }
@@ -135,43 +135,43 @@ func (base *DatabaseImplBase) Base() *DatabaseImplBase {
 	return base
 }
 
-func (base *DatabaseImplBase) GetOption(key string) (string, error) {
+func (base *DatabaseImplBase) GetOption(ctx context.Context, key string) (string, error) {
 	return "", base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
-func (base *DatabaseImplBase) GetOptionBytes(key string) ([]byte, error) {
+func (base *DatabaseImplBase) GetOptionBytes(ctx context.Context, key string) ([]byte, error) {
 	return nil, base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
-func (base *DatabaseImplBase) GetOptionDouble(key string) (float64, error) {
+func (base *DatabaseImplBase) GetOptionDouble(ctx context.Context, key string) (float64, error) {
 	return 0, base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
-func (base *DatabaseImplBase) GetOptionInt(key string) (int64, error) {
+func (base *DatabaseImplBase) GetOptionInt(ctx context.Context, key string) (int64, error) {
 	return 0, base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
-func (base *DatabaseImplBase) SetOption(key string, val string) error {
+func (base *DatabaseImplBase) SetOption(ctx context.Context, key string, val string) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
-func (base *DatabaseImplBase) SetOptionBytes(key string, val []byte) error {
+func (base *DatabaseImplBase) SetOptionBytes(ctx context.Context, key string, val []byte) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
-func (base *DatabaseImplBase) SetOptionDouble(key string, val float64) error {
+func (base *DatabaseImplBase) SetOptionDouble(ctx context.Context, key string, val float64) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
-func (base *DatabaseImplBase) SetOptionInt(key string, val int64) error {
+func (base *DatabaseImplBase) SetOptionInt(ctx context.Context, key string, val int64) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
-func (base *database) Close() error {
-	return base.Base().Close()
+func (base *database) Close(ctx context.Context) error {
+	return base.Base().Close(ctx)
 }
 
-func (base *DatabaseImplBase) Close() (err error) {
+func (base *DatabaseImplBase) Close(ctx context.Context) (err error) {
 	if base.Base().tracerShutdownFunc != nil {
 		err = base.Base().tracerShutdownFunc(context.Background())
 		base.Base().tracerShutdownFunc = nil
@@ -179,13 +179,13 @@ func (base *DatabaseImplBase) Close() (err error) {
 	return
 }
 
-func (base *DatabaseImplBase) Open(ctx context.Context) (adbc.Connection, error) {
+func (base *DatabaseImplBase) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
 	return nil, base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "Open")
 }
 
-func (base *DatabaseImplBase) SetOptions(options map[string]string) error {
+func (base *DatabaseImplBase) SetOptions(ctx context.Context, options map[string]string) error {
 	for key, val := range options {
-		if err := base.SetOption(key, val); err != nil {
+		if err := base.SetOption(ctx, key, val); err != nil {
 			return err
 		}
 	}
@@ -445,3 +445,4 @@ func newTracerProvider(exporters ...sdktrace.SpanExporter) (*sdktrace.TracerProv
 }
 
 var _ DatabaseImpl = (*DatabaseImplBase)(nil)
+var _ Database = (*database)(nil)

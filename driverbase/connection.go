@@ -53,8 +53,8 @@ const (
 // ConnectionImpl is an interface that drivers implement to provide
 // vendor-specific functionality.
 type ConnectionImpl interface {
-	adbc.Connection
-	adbc.GetSetOptions
+	adbc.ConnectionWithContext
+	adbc.GetSetOptionsWithContext
 	adbc.OTelTracing
 	Base() *ConnectionImplBase
 }
@@ -63,10 +63,10 @@ type ConnectionImpl interface {
 // stateful namespacing with DB catalogs and schemas. The appropriate (Get/Set)Options
 // implementations will be provided using the results of these methods.
 type CurrentNamespacer interface {
-	GetCurrentCatalog() (string, error)
-	GetCurrentDbSchema() (string, error)
-	SetCurrentCatalog(string) error
-	SetCurrentDbSchema(string) error
+	GetCurrentCatalog(context.Context) (string, error)
+	GetCurrentDbSchema(context.Context) (string, error)
+	SetCurrentCatalog(context.Context, string) error
+	SetCurrentDbSchema(context.Context, string) error
 }
 
 // DriverInfoPreparer is an interface that drivers may implement to add/update
@@ -91,7 +91,7 @@ type TableTypeLister interface {
 // does not produce an error. (Get/Set)Options implementations are provided automatically
 // as well/
 type AutocommitSetter interface {
-	SetAutocommit(enabled bool) error
+	SetAutocommit(ctx context.Context, enabled bool) error
 }
 
 // DbObjectsEnumerator is an interface that drivers may implement to simplify the
@@ -112,8 +112,8 @@ type DbObjectsEnumeratorFactory func(context.Context) (DbObjectsEnumerator, erro
 // Connection is the interface satisfied by the result of the NewConnection constructor,
 // given that an input is provided satisfying the ConnectionImpl interface.
 type Connection interface {
-	adbc.Connection
-	adbc.GetSetOptions
+	adbc.ConnectionWithContext
+	adbc.GetSetOptionsWithContext
 }
 
 // ConnectionImplBase is a struct that provides default implementations of the
@@ -225,7 +225,7 @@ func (base *ConnectionImplBase) GetInfo(ctx context.Context, infoCodes []adbc.In
 	return reader, err
 }
 
-func (base *ConnectionImplBase) Close() error {
+func (base *ConnectionImplBase) Close(ctx context.Context) error {
 	return nil
 }
 
@@ -241,7 +241,7 @@ func (base *ConnectionImplBase) GetTableTypes(context.Context) (array.RecordRead
 	return nil, base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "GetTableTypes")
 }
 
-func (base *ConnectionImplBase) NewStatement() (adbc.Statement, error) {
+func (base *ConnectionImplBase) NewStatement(ctx context.Context) (adbc.StatementWithContext, error) {
 	return nil, base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "NewStatement")
 }
 
@@ -249,7 +249,7 @@ func (base *ConnectionImplBase) ReadPartition(ctx context.Context, serializedPar
 	return nil, base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "ReadPartition")
 }
 
-func (base *ConnectionImplBase) GetOption(key string) (string, error) {
+func (base *ConnectionImplBase) GetOption(ctx context.Context, key string) (string, error) {
 	switch strings.ToLower(key) {
 	case adbc.OptionKeyTelemetryTraceParent:
 		return base.GetTraceParent(), nil
@@ -257,19 +257,19 @@ func (base *ConnectionImplBase) GetOption(key string) (string, error) {
 	return "", base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", ConnectionMessageOptionUnknown, key)
 }
 
-func (base *ConnectionImplBase) GetOptionBytes(key string) ([]byte, error) {
+func (base *ConnectionImplBase) GetOptionBytes(ctx context.Context, key string) ([]byte, error) {
 	return nil, base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", ConnectionMessageOptionUnknown, key)
 }
 
-func (base *ConnectionImplBase) GetOptionDouble(key string) (float64, error) {
+func (base *ConnectionImplBase) GetOptionDouble(ctx context.Context, key string) (float64, error) {
 	return 0, base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", ConnectionMessageOptionUnknown, key)
 }
 
-func (base *ConnectionImplBase) GetOptionInt(key string) (int64, error) {
+func (base *ConnectionImplBase) GetOptionInt(ctx context.Context, key string) (int64, error) {
 	return 0, base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", ConnectionMessageOptionUnknown, key)
 }
 
-func (base *ConnectionImplBase) SetOption(key string, val string) error {
+func (base *ConnectionImplBase) SetOption(ctx context.Context, key string, val string) error {
 	switch strings.ToLower(key) {
 	case adbc.OptionKeyAutoCommit:
 		return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", ConnectionMessageOptionUnsupported, key)
@@ -280,15 +280,15 @@ func (base *ConnectionImplBase) SetOption(key string, val string) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", ConnectionMessageOptionUnknown, key)
 }
 
-func (base *ConnectionImplBase) SetOptionBytes(key string, val []byte) error {
+func (base *ConnectionImplBase) SetOptionBytes(ctx context.Context, key string, val []byte) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", ConnectionMessageOptionUnknown, key)
 }
 
-func (base *ConnectionImplBase) SetOptionDouble(key string, val float64) error {
+func (base *ConnectionImplBase) SetOptionDouble(ctx context.Context, key string, val float64) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", ConnectionMessageOptionUnknown, key)
 }
 
-func (base *ConnectionImplBase) SetOptionInt(key string, val int64) error {
+func (base *ConnectionImplBase) SetOptionInt(ctx context.Context, key string, val int64) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", ConnectionMessageOptionUnknown, key)
 }
 
@@ -516,7 +516,7 @@ func (cnxn *connection) GetObjects(ctx context.Context, depth adbc.ObjectDepth, 
 	return rdr, errors.Join(err, g.Wait())
 }
 
-func (cnxn *connection) GetOption(key string) (string, error) {
+func (cnxn *connection) GetOption(ctx context.Context, key string) (string, error) {
 	switch key {
 	case adbc.OptionKeyAutoCommit:
 		if cnxn.Base().Autocommit {
@@ -526,7 +526,7 @@ func (cnxn *connection) GetOption(key string) (string, error) {
 		}
 	case adbc.OptionKeyCurrentCatalog:
 		if cnxn.currentNamespacer != nil {
-			val, err := cnxn.currentNamespacer.GetCurrentCatalog()
+			val, err := cnxn.currentNamespacer.GetCurrentCatalog(ctx)
 			if err != nil {
 				return "", cnxn.Base().ErrorHelper.Errorf(adbc.StatusNotFound, "failed to get current catalog: %s", err)
 			}
@@ -534,21 +534,20 @@ func (cnxn *connection) GetOption(key string) (string, error) {
 		}
 	case adbc.OptionKeyCurrentDbSchema:
 		if cnxn.currentNamespacer != nil {
-			val, err := cnxn.currentNamespacer.GetCurrentDbSchema()
+			val, err := cnxn.currentNamespacer.GetCurrentDbSchema(ctx)
 			if err != nil {
 				return "", cnxn.Base().ErrorHelper.Errorf(adbc.StatusNotFound, "failed to get current db schema: %s", err)
 			}
 			return val, nil
 		}
 	}
-	return cnxn.ConnectionImpl.GetOption(key)
+	return cnxn.ConnectionImpl.GetOption(ctx, key)
 }
 
-func (cnxn *connection) SetOption(key string, val string) error {
+func (cnxn *connection) SetOption(ctx context.Context, key, val string) error {
 	switch key {
 	case adbc.OptionKeyAutoCommit:
 		if cnxn.autocommitSetter != nil {
-
 			var autocommit bool
 			switch val {
 			case adbc.OptionValueEnabled:
@@ -559,7 +558,7 @@ func (cnxn *connection) SetOption(key string, val string) error {
 				return cnxn.Base().ErrorHelper.Errorf(adbc.StatusInvalidArgument, "cannot set value %s for key %s", val, key)
 			}
 
-			err := cnxn.autocommitSetter.SetAutocommit(autocommit)
+			err := cnxn.autocommitSetter.SetAutocommit(ctx, autocommit)
 			if err == nil {
 				// Only update the driver state if the action was successful
 				cnxn.Base().Autocommit = autocommit
@@ -569,14 +568,14 @@ func (cnxn *connection) SetOption(key string, val string) error {
 		}
 	case adbc.OptionKeyCurrentCatalog:
 		if cnxn.currentNamespacer != nil {
-			return cnxn.currentNamespacer.SetCurrentCatalog(val)
+			return cnxn.currentNamespacer.SetCurrentCatalog(ctx, val)
 		}
 	case adbc.OptionKeyCurrentDbSchema:
 		if cnxn.currentNamespacer != nil {
-			return cnxn.currentNamespacer.SetCurrentDbSchema(val)
+			return cnxn.currentNamespacer.SetCurrentDbSchema(ctx, val)
 		}
 	}
-	return cnxn.ConnectionImpl.SetOption(key, val)
+	return cnxn.ConnectionImpl.SetOption(ctx, key, val)
 }
 
 func (cnxn *connection) GetInfo(ctx context.Context, infoCodes []adbc.InfoCode) (array.RecordReader, error) {
@@ -638,12 +637,12 @@ func (cnxn *connection) Rollback(ctx context.Context) error {
 	return cnxn.ConnectionImpl.Rollback(ctx)
 }
 
-func (cnxn *connection) Close() error {
+func (cnxn *connection) Close(ctx context.Context) error {
 	if cnxn.Base().Closed {
 		return cnxn.Base().ErrorHelper.Errorf(adbc.StatusInvalidState, "Trying to close already closed connection")
 	}
 
-	err := cnxn.ConnectionImpl.Close()
+	err := cnxn.ConnectionImpl.Close(ctx)
 	if err == nil {
 		cnxn.Base().Closed = true
 	}
@@ -846,3 +845,4 @@ func propagateTraceParent(ctx context.Context, traceParentStr string) (trace.Spa
 }
 
 var _ ConnectionImpl = (*ConnectionImplBase)(nil)
+var _ Connection = (*connection)(nil)
