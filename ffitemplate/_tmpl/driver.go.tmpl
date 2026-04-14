@@ -55,6 +55,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -81,6 +82,7 @@ var globalPoison atomic.Bool
 
 const errPrefix = "[{{.PrefixLower}}] "
 const logLevelEnvVar = "ADBC_DRIVER_{{.PrefixUpper}}_LOG_LEVEL"
+const logSinkEnvVar = "ADBC_DRIVER_{{.PrefixUpper}}_LOG_SINK"
 
 func setErr(err *C.struct_AdbcError, format string, vals ...interface{}) {
 	if err == nil {
@@ -219,7 +221,23 @@ func initLoggingFromEnv(db adbc.DatabaseLogging) {
 		return
 	}
 
-	h := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+	var sink io.Writer
+	sink = os.Stderr
+	switch strings.ToLower(os.Getenv(logSinkEnvVar)) {
+	case "stderr":
+		// do nothing
+	case "tempfile":
+		// stopgap for debugging; eventually we should support things like
+		// logging to ~/.local/share/adbc (or something) and rotation
+		f, err := os.CreateTemp("", "adbc-{{.PrefixLower}}.*.log")
+		if err == nil {
+			sink = f
+		} else {
+			fmt.Fprintf(os.Stderr, "[{{.PrefixLower}}] could not open temporary log file: %v", err)
+		}
+	}
+
+	h := slog.NewJSONHandler(sink, &slog.HandlerOptions{
 		AddSource: false,
 		Level:     logLevel,
 	})
