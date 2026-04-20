@@ -1356,3 +1356,138 @@ func (s *StatementTests) TestSqlIngestErrors() {
 		s.NotEqual(adbc.StatusOK, e.Code)
 	})
 }
+
+// Regression test: ensure that bind + close actually releases parameters
+func (s *StatementTests) TestBindClose() {
+	// XXX: with current test structure, this relies on the downstream
+	// test implementer using a checked allocator and providing it to the
+	// driver
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
+	batchJSON := `[{"a": 1}, {"a": 2}, {"a": null}]`
+	ctx := context.Background()
+	stmt, err := s.Cnxn.NewStatement(ctx)
+	s.Require().NoError(err)
+
+	batch := testutil.RecordFromJSON(s.T(), s.Quirks.Alloc(), schema, batchJSON)
+	s.Require().NoError(stmt.Bind(ctx, batch))
+	// bind should hold the batch
+	batch.Release()
+
+	s.Require().NoError(stmt.Close(ctx))
+}
+
+// Regression test: ensure that bind stream + close actually releases parameters
+func (s *StatementTests) TestBindStreamClose() {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
+	batchJSON := `[{"a": 1}, {"a": 2}, {"a": null}]`
+	ctx := context.Background()
+	stmt, err := s.Cnxn.NewStatement(ctx)
+	s.Require().NoError(err)
+
+	batch := testutil.RecordFromJSON(s.T(), s.Quirks.Alloc(), schema, batchJSON)
+	stream, err := array.NewRecordReader(schema, []arrow.RecordBatch{batch})
+	batch.Release()
+	s.Require().NoError(err)
+	s.Require().NoError(stmt.BindStream(ctx, stream))
+	// bind should hold the stream
+	stream.Release()
+
+	s.Require().NoError(stmt.Close(ctx))
+
+}
+
+// Regression test: ensure that bind + execute actually releases parameters
+func (s *StatementTests) TestBindExecuteQuery() {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
+	batchJSON := `[{"a": 1}, {"a": 2}, {"a": null}]`
+	ctx := context.Background()
+	stmt, err := s.Cnxn.NewStatement(ctx)
+	s.Require().NoError(err)
+
+	batch := testutil.RecordFromJSON(s.T(), s.Quirks.Alloc(), schema, batchJSON)
+	s.Require().NoError(stmt.Bind(ctx, batch))
+	batch.Release()
+
+	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(1)))
+	rdr, _, err := stmt.ExecuteQuery(ctx)
+	s.Require().NoError(err)
+	rdr.Release()
+
+	s.Require().NoError(stmt.Close(ctx))
+}
+
+// Regression test: ensure that bind stream + execute actually releases parameters
+func (s *StatementTests) TestBindStreamExecuteQuery() {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
+	batchJSON := `[{"a": 1}, {"a": 2}, {"a": null}]`
+	ctx := context.Background()
+	stmt, err := s.Cnxn.NewStatement(ctx)
+	s.Require().NoError(err)
+
+	batch := testutil.RecordFromJSON(s.T(), s.Quirks.Alloc(), schema, batchJSON)
+	stream, err := array.NewRecordReader(schema, []arrow.RecordBatch{batch})
+	batch.Release()
+	s.Require().NoError(err)
+	s.Require().NoError(stmt.BindStream(ctx, stream))
+	stream.Release()
+
+	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(1)))
+	rdr, _, err := stmt.ExecuteQuery(ctx)
+	s.Require().NoError(err)
+	rdr.Release()
+
+	s.Require().NoError(stmt.Close(ctx))
+}
+
+// Regression test: ensure that bind + execute update actually releases parameters
+func (s *StatementTests) TestBindExecuteUpdate() {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
+	batchJSON := `[{"a": 1}, {"a": 2}, {"a": null}]`
+	ctx := context.Background()
+	stmt, err := s.Cnxn.NewStatement(ctx)
+	s.Require().NoError(err)
+
+	batch := testutil.RecordFromJSON(s.T(), s.Quirks.Alloc(), schema, batchJSON)
+	s.Require().NoError(stmt.Bind(ctx, batch))
+	batch.Release()
+
+	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(1)))
+	_, err = stmt.ExecuteUpdate(ctx)
+	s.Require().NoError(err)
+
+	s.Require().NoError(stmt.Close(ctx))
+}
+
+// Regression test: ensure that bind stream + execute update actually releases parameters
+func (s *StatementTests) TestBindStreamExecuteUpdate() {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
+	batchJSON := `[{"a": 1}, {"a": 2}, {"a": null}]`
+	ctx := context.Background()
+	stmt, err := s.Cnxn.NewStatement(ctx)
+	s.Require().NoError(err)
+
+	batch := testutil.RecordFromJSON(s.T(), s.Quirks.Alloc(), schema, batchJSON)
+	stream, err := array.NewRecordReader(schema, []arrow.RecordBatch{batch})
+	batch.Release()
+	s.Require().NoError(err)
+	s.Require().NoError(stmt.BindStream(ctx, stream))
+	stream.Release()
+
+	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(1)))
+	_, err = stmt.ExecuteUpdate(ctx)
+	s.Require().NoError(err)
+
+	s.Require().NoError(stmt.Close(ctx))
+}
