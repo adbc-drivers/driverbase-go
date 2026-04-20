@@ -154,19 +154,19 @@ func (st *StatementImplBase) GetOption(ctx context.Context, key string) (string,
 	case adbc.OptionKeyTelemetryTraceParent:
 		return st.GetTraceParent(), nil
 	}
-	return "", st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
+	return "", st.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
 func (st *StatementImplBase) GetOptionBytes(ctx context.Context, key string) ([]byte, error) {
-	return nil, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
+	return nil, st.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
 func (st *StatementImplBase) GetOptionInt(ctx context.Context, key string) (int64, error) {
-	return 0, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
+	return 0, st.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
 func (st *StatementImplBase) GetOptionDouble(ctx context.Context, key string) (float64, error) {
-	return 0, st.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", StatementMessageOptionUnknown, key)
+	return 0, st.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", StatementMessageOptionUnknown, key)
 }
 
 func (st *StatementImplBase) GetTraceParent() string {
