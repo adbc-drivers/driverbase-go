@@ -106,12 +106,6 @@ func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
 		s.stmt = nil
 	}
 
-	// Clear any bound parameters when setting a new query
-	if s.boundStream != nil {
-		s.boundStream.Release()
-		s.boundStream = nil
-	}
-
 	// Setting a SQL query switches out of bulk ingest mode
 	s.bulkIngestOptions.Clear()
 
@@ -376,6 +370,11 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 		return -1, s.Base().ErrorHelper.InvalidArgument("no query set")
 	}
 
+	defer func() {
+		s.boundStream.Release()
+		s.boundStream = nil
+	}()
+
 	// Prepare statement if needed
 	var stmt *LoggingStmt
 	if s.stmt != nil {
@@ -434,6 +433,11 @@ func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
 
 	// Type-assert to the BulkIngester interface for database-specific implementations
 	if ingester, ok := s.connectionImpl.(BulkIngester); ok {
+		defer func() {
+			s.boundStream.Release()
+			s.boundStream = nil
+		}()
+
 		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.conn, &s.bulkIngestOptions, s.boundStream)
 		if err != nil {
 			return -1, err
