@@ -82,29 +82,29 @@ repos:
     name: go fix /driverbase
     language: system
     types: [go]
-    entry: bash -c 'cd driverbase && go fix'
+    entry: bash -c 'cd driverbase && go fix ./...'
     pass_filenames: false
   - id: gofix-ffitemplate
     name: go fix /ffitemplate
     language: system
     types: [go]
-    entry: bash -c 'cd ffitemplate && go fix'
+    entry: bash -c 'cd ffitemplate && go fix ./...'
     pass_filenames: false
   - id: gofix-sqlwrapper
     name: go fix /sqlwrapper
     language: system
     types: [go]
-    entry: bash -c 'cd sqlwrapper && go fix'
+    entry: bash -c 'cd sqlwrapper && go fix ./...'
     pass_filenames: false
   - id: gofix-testutil
     name: go fix /testutil
     language: system
     types: [go]
-    entry: bash -c 'cd testutil && go fix'
+    entry: bash -c 'cd testutil && go fix ./...'
     pass_filenames: false
   - id: gofix-validation
     name: go fix /validation
     language: system
     types: [go]
-    entry: bash -c 'cd validation && go fix'
+    entry: bash -c 'cd validation && go fix ./...'
     pass_filenames: false
