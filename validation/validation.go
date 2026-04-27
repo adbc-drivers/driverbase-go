@@ -1414,7 +1414,7 @@ func (s *StatementTests) TestBindExecuteQuery() {
 	s.Require().NoError(stmt.Bind(ctx, batch))
 	batch.Release()
 
-	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(1)))
+	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(0)))
 	rdr, _, err := stmt.ExecuteQuery(ctx)
 	s.Require().NoError(err)
 	rdr.Release()
@@ -1439,7 +1439,7 @@ func (s *StatementTests) TestBindStreamExecuteQuery() {
 	s.Require().NoError(stmt.BindStream(ctx, stream))
 	stream.Release()
 
-	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(1)))
+	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(0)))
 	rdr, _, err := stmt.ExecuteQuery(ctx)
 	s.Require().NoError(err)
 	rdr.Release()
@@ -1461,7 +1461,7 @@ func (s *StatementTests) TestBindExecuteUpdate() {
 	s.Require().NoError(stmt.Bind(ctx, batch))
 	batch.Release()
 
-	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(1)))
+	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(0)))
 	_, err = stmt.ExecuteUpdate(ctx)
 	s.Require().NoError(err)
 
@@ -1485,7 +1485,7 @@ func (s *StatementTests) TestBindStreamExecuteUpdate() {
 	s.Require().NoError(stmt.BindStream(ctx, stream))
 	stream.Release()
 
-	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(1)))
+	s.Require().NoError(stmt.SetSqlQuery(ctx, "SELECT "+s.Quirks.BindParameter(0)))
 	_, err = stmt.ExecuteUpdate(ctx)
 	s.Require().NoError(err)
 
