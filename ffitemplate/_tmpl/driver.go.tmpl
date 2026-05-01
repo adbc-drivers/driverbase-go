@@ -441,7 +441,7 @@ func {{.Prefix}}ArrayStreamRelease(stream *C.struct_ArrowArrayStream) {
 	if cStream.adbcErr != nil {
 		C.{{.Prefix}}errRelease(cStream.adbcErr)
 		C.free(unsafe.Pointer(cStream.adbcErr))
-	}	
+	}
 	runtime.GC()
 }
 
@@ -627,7 +627,7 @@ func {{.Prefix}}DatabaseRelease(db *C.struct_AdbcDatabase, err *C.struct_AdbcErr
 		cdb.db = nil
 	}
 	cdb.opts = nil
-	
+
 	// manually trigger GC for two reasons:
 	//  1. ASAN expects the release callback to be called before
 	//     the process ends, but GC is not deterministic. So by manually
@@ -971,7 +971,7 @@ func {{.Prefix}}ConnectionRelease(cnxn *C.struct_AdbcConnection, err *C.struct_A
 	defer func() {
 		conn.cancelContext()
 		conn.cnxn = nil
-		
+
 		// manually trigger GC for two reasons:
 		//  1. ASAN expects the release callback to be called before
 		//     the process ends, but GC is not deterministic. So by manually
@@ -1419,7 +1419,7 @@ func {{.Prefix}}StatementRelease(stmt *C.struct_AdbcStatement, err *C.struct_Adb
 	h.Delete()
 	defer func() {
 		st.cancelContext()
-		st.stmt = nil		
+		st.stmt = nil
 		// manually trigger GC for two reasons:
 		//  1. ASAN expects the release callback to be called before
 		//     the process ends, but GC is not deterministic. So by manually
