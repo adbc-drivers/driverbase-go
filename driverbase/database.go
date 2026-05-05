@@ -168,7 +168,9 @@ func (base *DatabaseImplBase) SetOptionInt(ctx context.Context, key string, val 
 }
 
 func (base *database) Close(ctx context.Context) error {
-	return base.Base().Close(ctx)
+	implErr := base.DatabaseImpl.Close(ctx)
+	baseErr := base.Base().Close(ctx)
+	return errors.Join(implErr, baseErr)
 }
 
 func (base *DatabaseImplBase) Close(ctx context.Context) (err error) {
