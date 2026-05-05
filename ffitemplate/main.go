@@ -187,9 +187,14 @@ func process(data any, specs []pathSpec) {
 		}
 
 		if f != nil {
-			generated, err = f(generated)
+			orig := generated
+			generated, err = f(orig)
 			if err != nil {
-				log.Fatalf("error formatting '%s': %s", spec.in, err)
+				// write bad file for debugging
+				if err := os.WriteFile(spec.out, orig, fileMode(spec.in)); err != nil {
+					log.Printf("could not write unformatted '%s': %s", spec.out, err)
+				}
+				log.Fatalf("error formatting '%s': %s", spec.out, err)
 			}
 		}
 		if err := os.WriteFile(spec.out, generated, fileMode(spec.in)); err != nil {

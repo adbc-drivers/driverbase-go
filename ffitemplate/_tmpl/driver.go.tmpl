@@ -468,10 +468,17 @@ func exportRecordReader(rdr array.RecordReader, stream *C.struct_ArrowArrayStrea
 	rdr.Retain()
 }
 
+type unappliedOpt struct {
+	stringVal *string
+	int64Val  *int64
+	byteVal   []byte
+	doubleVal *float64
+}
+
 type cDatabase struct {
 	cancellableContext
 
-	opts map[string]string
+	opts map[string]unappliedOpt
 	db   driverbase.Database
 }
 
@@ -576,12 +583,35 @@ func {{.Prefix}}DatabaseInit(db *C.struct_AdbcDatabase, err *C.struct_AdbcError)
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	adb, aerr := drv.NewDatabaseWithContext(cdb.newContext(), cdb.opts)
+	stringOpts := map[string]string{}
+	for k, v := range cdb.opts {
+		if v.stringVal != nil {
+			stringOpts[k] = *v.stringVal
+		}
+	}
+	ctx := cdb.newContext()
+	adb, aerr := drv.NewDatabaseWithContext(ctx, stringOpts)
 	if aerr != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, aerr))
 	}
 
 	cdb.db = adb.(driverbase.Database)
+	for k, v := range cdb.opts {
+		switch {
+		case v.stringVal != nil:
+			continue
+		case v.int64Val != nil:
+			aerr = cdb.db.SetOptionInt(ctx, k, *v.int64Val)
+		case v.byteVal != nil:
+			aerr = cdb.db.SetOptionBytes(ctx, k, v.byteVal)
+		case v.doubleVal != nil:
+			aerr = cdb.db.SetOptionDouble(ctx, k, *v.doubleVal)
+		}
+		if aerr != nil {
+			return C.AdbcStatusCode(errToAdbcErr(err, aerr))
+		}
+	}
+
 	initLoggingFromEnv(cdb.db)
 	return C.ADBC_STATUS_OK
 }
@@ -601,7 +631,7 @@ func {{.Prefix}}DatabaseNew(db *C.struct_AdbcDatabase, err *C.struct_AdbcError) 
 		setErr(err, "AdbcDatabaseNew: database already allocated")
 		return C.ADBC_STATUS_INVALID_STATE
 	}
-	dbobj := &cDatabase{opts: make(map[string]string)}
+	dbobj := &cDatabase{opts: make(map[string]unappliedOpt)}
 	hndl := cgo.NewHandle(dbobj)
 	db.private_data = createHandle(hndl)
 	return C.ADBC_STATUS_OK
@@ -655,7 +685,7 @@ func {{.Prefix}}DatabaseSetOption(db *C.struct_AdbcDatabase, key, value *C.cchar
 		e := cdb.db.SetOption(cdb.newContext(), k, v)
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	} else {
-		cdb.opts[k] = v
+		cdb.opts[k] = unappliedOpt { stringVal: new(v) }
 	}
 
 	return C.ADBC_STATUS_OK
@@ -668,13 +698,19 @@ func {{.Prefix}}DatabaseSetOptionBytes(db *C.struct_AdbcDatabase, key *C.cchar_t
 			code = poison(err, "AdbcDatabaseSetOptionBytes", e)
 		}
 	}()
-	cdb := checkDBInit(db, err, "AdbcDatabaseSetOptionBytes")
-	if cdb == nil {
+	if !checkDBAlloc(db, err, "AdbcDatabaseSetOptionBytes") {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
+	cdb := getFromHandle[cDatabase](db.private_data)
+	k := C.GoString(key)
+	v := fromCArr[byte](value, int(length))
 
-        e := cdb.db.SetOptionBytes(cdb.newContext(), C.GoString(key), fromCArr[byte](value, int(length)))
-	return C.AdbcStatusCode(errToAdbcErr(err, e))
+	if cdb.db != nil {
+		e := cdb.db.SetOptionBytes(cdb.newContext(), k, v)
+		return C.AdbcStatusCode(errToAdbcErr(err, e))
+	}
+	cdb.opts[k] = unappliedOpt { byteVal: v }
+	return C.ADBC_STATUS_OK
 }
 
 //export {{.Prefix}}DatabaseSetOptionDouble
@@ -684,13 +720,19 @@ func {{.Prefix}}DatabaseSetOptionDouble(db *C.struct_AdbcDatabase, key *C.cchar_
 			code = poison(err, "AdbcDatabaseSetOptionDouble", e)
 		}
 	}()
-	cdb := checkDBInit(db, err, "AdbcDatabaseSetOptionDouble")
-	if cdb == nil {
+	if !checkDBAlloc(db, err, "AdbcDatabaseSetOptionDouble") {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
+	cdb := getFromHandle[cDatabase](db.private_data)
+	k := C.GoString(key)
+	v := float64(value)
 
-	e := cdb.db.SetOptionDouble(cdb.newContext(), C.GoString(key), float64(value))
-	return C.AdbcStatusCode(errToAdbcErr(err, e))
+	if cdb.db != nil {
+		e := cdb.db.SetOptionDouble(cdb.newContext(), k, v)
+		return C.AdbcStatusCode(errToAdbcErr(err, e))
+	}
+	cdb.opts[k] = unappliedOpt { doubleVal: new(v) }
+	return C.ADBC_STATUS_OK
 }
 
 //export {{.Prefix}}DatabaseSetOptionInt
@@ -700,13 +742,19 @@ func {{.Prefix}}DatabaseSetOptionInt(db *C.struct_AdbcDatabase, key *C.cchar_t, 
 			code = poison(err, "AdbcDatabaseSetOptionInt", e)
 		}
 	}()
-	cdb := checkDBInit(db, err, "AdbcDatabaseSetOptionInt")
-	if cdb == nil {
+	if !checkDBAlloc(db, err, "AdbcDatabaseSetOptionInt") {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
+	cdb := getFromHandle[cDatabase](db.private_data)
+	k := C.GoString(key)
+	v := int64(value)
 
-	e := cdb.db.SetOptionInt(cdb.newContext(), C.GoString(key), int64(value))
-	return C.AdbcStatusCode(errToAdbcErr(err, e))
+	if cdb.db != nil {
+		e := cdb.db.SetOptionInt(cdb.newContext(), k, v)
+		return C.AdbcStatusCode(errToAdbcErr(err, e))
+	}
+	cdb.opts[k] = unappliedOpt { int64Val: new(v) }
+	return C.ADBC_STATUS_OK
 }
 
 type cConn struct {
