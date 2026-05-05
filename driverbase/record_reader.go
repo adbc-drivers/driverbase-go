@@ -99,16 +99,26 @@ type BaseRecordReader struct {
 	mu sync.Mutex
 }
 
+// BaseRecordReaderOptions are options for BaseRecordReader.
 type BaseRecordReaderOptions struct {
+	// BatchByteLimit is a soft limit on the estimated memory size of
+	// batches returned by Next. If 0, it is not enforced.
 	BatchByteLimit int64
-	BatchRowLimit  int64
+	// BatchRowLimit is a soft limit on the number of rows in batches
+	// returned by Next. If 0, it defaults to DefaultBatchRowLimit.
+	BatchRowLimit int64
 }
+
+const (
+	DefaultBatchByteLimit int64 = 0
+	DefaultBatchRowLimit  int64 = 65536
+)
 
 func (options *BaseRecordReaderOptions) validate() error {
 	if options.BatchRowLimit < 0 {
 		return errors.New("driverbase: BaseRecordReaderOptions: BatchRowLimit must be non-negative")
 	} else if options.BatchRowLimit == 0 {
-		options.BatchRowLimit = 65536
+		options.BatchRowLimit = DefaultBatchRowLimit
 	}
 	return nil
 }
