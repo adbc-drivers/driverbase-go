@@ -48,7 +48,7 @@ func CheckedCloseWithContext(t *testing.T, obj CloserWithContext, ctx context.Co
 
 // ArrayFromJSON is the same as array.FromJSON, but fails the test on error.
 func ArrayFromJSON(t *testing.T, mem memory.Allocator, dt arrow.DataType, json string) arrow.Array {
-	record, _, err := array.FromJSON(mem, dt, bytes.NewReader([]byte(json)))
+	record, _, err := array.FromJSON(mem, dt, bytes.NewReader([]byte(json)), array.WithUseNumber())
 	if err != nil {
 		t.Fatalf("failed to create array from JSON: %v", err)
 	}
@@ -57,7 +57,7 @@ func ArrayFromJSON(t *testing.T, mem memory.Allocator, dt arrow.DataType, json s
 
 // RecordFromJSON is the same as array.RecordFromJSON, but fails the test on error.
 func RecordFromJSON(t *testing.T, mem memory.Allocator, schema *arrow.Schema, json string) arrow.RecordBatch {
-	record, _, err := array.RecordFromJSON(mem, schema, bytes.NewReader([]byte(json)))
+	record, _, err := array.RecordFromJSON(mem, schema, bytes.NewReader([]byte(json)), array.WithUseNumber())
 	if err != nil {
 		t.Fatalf("failed to create record from JSON: %v", err)
 	}
