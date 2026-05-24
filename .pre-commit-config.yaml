@@ -14,12 +14,12 @@
 
 repos:
 - repo: https://github.com/codespell-project/codespell
-  rev: 63c8f8312b7559622c0d82815639671ae42132ac  # v2.4.1
+  rev: 2ccb47ff45ad361a21071a7eedda4c37e6ae8c5a  # frozen: v2.4.2
   hooks:
   - id: codespell
 
 - repo: https://github.com/golangci/golangci-lint
-  rev: 72798d34b1eb36745915b0d4eea5c2b3b31bdfe3  # frozen: v2.9.0
+  rev: c0d3ddc9cf3faa61a4e378e879ece580256d76e5  # frozen: v2.12.2
   hooks:
   - id: golangci-lint
     name: lint driverbase
@@ -72,7 +72,7 @@ repos:
   - id: trailing-whitespace
 
 - repo: https://github.com/adbc-drivers/dev
-  rev: 03bf2427d2f60555ff1950c28bfa9369130ef15f
+  rev: bf584ecf18b2fba42e0c8495688f2edaf6d6c840
   hooks:
   - id: rat
 
