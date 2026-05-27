@@ -62,6 +62,8 @@ type DriverQuirks interface {
 	SupportsCurrentCatalogSchema() bool
 	// Whether GetSetOptions is supported
 	SupportsGetSetOptions() bool
+	// Whether AdbcConnectionGetTableSchema should work
+	SupportsGetTableSchema() bool
 	// Whether AdbcStatementExecuteSchema should work
 	SupportsExecuteSchema() bool
 	// Whether AdbcStatementExecutePartitions should work
@@ -399,6 +401,10 @@ func (c *ConnectionTests) TestMetadataGetStatistics() {
 }
 
 func (c *ConnectionTests) TestMetadataGetTableSchema() {
+	if !c.Quirks.SupportsGetTableSchema() {
+		c.T().SkipNow()
+	}
+
 	rec, _, err := array.RecordFromJSON(c.Quirks.Alloc(), arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "ints", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
@@ -1402,6 +1408,10 @@ func (s *StatementTests) TestBindStreamClose() {
 
 // Regression test: ensure that bind + execute actually releases parameters
 func (s *StatementTests) TestBindExecuteQuery() {
+	if !s.Quirks.SupportsDynamicParameterBinding() {
+		s.T().SkipNow()
+	}
+
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil)
@@ -1424,6 +1434,10 @@ func (s *StatementTests) TestBindExecuteQuery() {
 
 // Regression test: ensure that bind stream + execute actually releases parameters
 func (s *StatementTests) TestBindStreamExecuteQuery() {
+	if !s.Quirks.SupportsDynamicParameterBinding() {
+		s.T().SkipNow()
+	}
+
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil)
@@ -1449,6 +1463,10 @@ func (s *StatementTests) TestBindStreamExecuteQuery() {
 
 // Regression test: ensure that bind + execute update actually releases parameters
 func (s *StatementTests) TestBindExecuteUpdate() {
+	if !s.Quirks.SupportsDynamicParameterBinding() {
+		s.T().SkipNow()
+	}
+
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil)
@@ -1470,6 +1488,10 @@ func (s *StatementTests) TestBindExecuteUpdate() {
 
 // Regression test: ensure that bind stream + execute update actually releases parameters
 func (s *StatementTests) TestBindStreamExecuteUpdate() {
+	if !s.Quirks.SupportsDynamicParameterBinding() {
+		s.T().SkipNow()
+	}
+
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil)
