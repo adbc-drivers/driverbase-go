@@ -35,10 +35,11 @@ type sqlRecordReaderImpl struct {
 	schema      *arrow.Schema
 
 	// For bind parameter support
-	conn          *LoggingConn  // Database connection to execute queries
-	query         string        // Original SQL query with placeholders
-	stmt          *LoggingStmt  // Prepared statement (optional)
-	typeConverter TypeConverter // Type converter for building schemas
+	conn             *LoggingConn  // Database connection to execute queries
+	query            string        // Original SQL query with placeholders
+	stmt             *LoggingStmt  // Prepared statement (optional)
+	typeConverter    TypeConverter // Type converter for building schemas
+	additionalParams []any
 
 	// Performance optimization: pre-computed inserters to avoid per-value type switching
 	columnInserters []Inserter
@@ -67,6 +68,10 @@ func (s *sqlRecordReaderImpl) NextResultSet(ctx context.Context, rec arrow.Recor
 				return nil, fmt.Errorf("failed to extract parameter %d: %w", i, err)
 			}
 		}
+	}
+
+	if len(s.additionalParams) > 0 {
+		args = append(args, s.additionalParams...)
 	}
 
 	// Execute query (with or without parameters)
