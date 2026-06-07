@@ -149,11 +149,11 @@ func (s *StatementImplBase) SetOption(ctx context.Context, key, val string) erro
 
 	switch key {
 	case OptionKeyBatchSize:
-		size, err := strconv.Atoi(val)
+		size, err := strconv.ParseInt(val, 10, 64)
 		if err != nil {
 			return s.Base().ErrorHelper.InvalidArgument("invalid batch size: %v", err)
 		}
-		return s.SetBatchSize(int64(size))
+		return s.SetBatchSize(size)
 	default:
 		return s.StatementImplBase.SetOption(ctx, key, val)
 	}
@@ -508,8 +508,20 @@ func ExecuteBatchedBulkIngest(
 	ingester BulkIngester,
 	errorHelper *driverbase.ErrorHelper,
 ) (totalRowsInserted int64, err error) {
-	if stream == nil {
-		return -1, errorHelper.InvalidArgument("stream cannot be nil")
+	if errorHelper == nil {
+		return -1, errors.New("errorHelper cannot be nil")
+	} else if stream == nil {
+		return -1, errorHelper.Internal("stream cannot be nil")
+	} else if stmtImpl == nil {
+		return -1, errorHelper.Internal("stmtImpl cannot be nil")
+	} else if conn == nil {
+		return -1, errorHelper.Internal("conn cannot be nil")
+	} else if options == nil {
+		return -1, errorHelper.Internal("options cannot be nil")
+	} else if typeConverter == nil {
+		return -1, errorHelper.Internal("typeConverter cannot be nil")
+	} else if ingester == nil {
+		return -1, errorHelper.Internal("ingester cannot be nil")
 	}
 
 	batchSize := options.IngestBatchSize
