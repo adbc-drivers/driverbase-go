@@ -31,7 +31,7 @@ import (
 
 // BulkIngester interface allows drivers to implement database-specific bulk ingest functionality
 type BulkIngester interface {
-	ExecuteBulkIngest(ctx context.Context, conn *LoggingConn, options *driverbase.BulkIngestOptions, stream array.RecordReader) (int64, error)
+	ExecuteBulkIngest(ctx context.Context, stmt StatementImpl, conn *LoggingConn, options *driverbase.BulkIngestOptions, stream array.RecordReader) (int64, error)
 
 	// QuoteIdentifier quotes a table/column identifier for SQL
 	QuoteIdentifier(name string) string
@@ -49,9 +49,17 @@ const (
 	OptionKeyBatchSize = "adbc.statement.batch_size"
 )
 
-// statementImpl implements the ADBC Statement interface on top of database/sql.
-type statementImpl struct {
+// StatementImpl implements the ADBC Statement interface on top of database/sql.
+type StatementImpl interface {
+	driverbase.StatementImpl
+
+	// Inject driver-specific params into Exec, as many drivers implement special functionality in this way
+	GetAdditionalExecParams() []any
+}
+
+type StatementImplBase struct {
 	driverbase.StatementImplBase
+	Derived StatementImpl
 
 	// conn is the dedicated SQL connection
 	conn *LoggingConn
@@ -64,7 +72,7 @@ type statementImpl struct {
 	// boundStream holds the bound Arrow record stream for bulk operations
 	boundStream array.RecordReader
 	// batchSize controls how many records to process at once during streaming execution
-	batchSize int
+	batchSize int64
 	// typeConverter handles SQL-to-Arrow type conversion
 	typeConverter TypeConverter
 
@@ -75,25 +83,42 @@ type statementImpl struct {
 }
 
 // Base returns the embedded StatementImplBase for driverbase plumbing
-func (s *statementImpl) Base() *driverbase.StatementImplBase {
+func (s *StatementImplBase) Base() *driverbase.StatementImplBase {
 	return &s.StatementImplBase
 }
 
+func (s *StatementImplBase) GetAdditionalExecParams() []any {
+	return nil
+}
+
 // newStatement constructs a new StatementImpl wrapped by driverbase
-func newStatement(c *ConnectionImplBase) adbc.StatementWithContext {
+func newStatement(c *ConnectionImplBase) (adbc.StatementWithContext, error) {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
-	return driverbase.NewStatement(&statementImpl{
+	wrapper := &StatementImplBase{
 		StatementImplBase: base,
 		conn:              c.Conn,
 		connectionImpl:    c.Derived,
 		batchSize:         1000, // Default batch size for streaming operations
 		typeConverter:     c.TypeConverter,
 		bulkIngestOptions: driverbase.NewBulkIngestOptions(),
-	})
+	}
+
+	var impl StatementImpl
+	if c.dbImpl.stmtFactory != nil {
+		var err error
+		impl, err = c.dbImpl.stmtFactory.CreateStatement(wrapper)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		impl = wrapper
+	}
+	wrapper.Derived = impl
+	return driverbase.NewStatement(impl), nil
 }
 
 // SetSqlQuery stores the SQL text on the statement
-func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
+func (s *StatementImplBase) SetSqlQuery(ctx context.Context, query string) error {
 	if err := s.connectionImpl.ClearPending(); err != nil {
 		return err
 	}
@@ -114,7 +139,7 @@ func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
 }
 
 // SetOption sets a string option on this statement
-func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
+func (s *StatementImplBase) SetOption(ctx context.Context, key, val string) error {
 	// Let driverbase handle standard bulk ingest options first
 	if handled, err := s.bulkIngestOptions.SetOption(&s.Base().ErrorHelper, key, val); err != nil {
 		return err
@@ -124,18 +149,27 @@ func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 
 	switch key {
 	case OptionKeyBatchSize:
-		size, err := strconv.Atoi(val)
+		size, err := strconv.ParseInt(val, 10, 64)
 		if err != nil {
 			return s.Base().ErrorHelper.InvalidArgument("invalid batch size: %v", err)
 		}
 		return s.SetBatchSize(size)
 	default:
-		return s.Base().ErrorHelper.NotImplemented("unsupported option: %s", key)
+		return s.StatementImplBase.SetOption(ctx, key, val)
+	}
+}
+
+func (s *StatementImplBase) SetOptionInt(ctx context.Context, key string, val int64) error {
+	switch key {
+	case OptionKeyBatchSize:
+		return s.SetBatchSize(val)
+	default:
+		return s.StatementImplBase.SetOptionInt(ctx, key, val)
 	}
 }
 
 // Bind uses an arrow record batch to bind parameters to the query
-func (s *statementImpl) Bind(ctx context.Context, record arrow.RecordBatch) error {
+func (s *StatementImplBase) Bind(ctx context.Context, record arrow.RecordBatch) error {
 	if record == nil {
 		return s.Base().ErrorHelper.InvalidArgument("record cannot be nil")
 	}
@@ -152,7 +186,7 @@ func (s *statementImpl) Bind(ctx context.Context, record arrow.RecordBatch) erro
 }
 
 // BindStream uses a record batch stream to bind parameters for bulk operations
-func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReader) error {
+func (s *StatementImplBase) BindStream(ctx context.Context, stream array.RecordReader) error {
 	if stream == nil {
 		return s.Base().ErrorHelper.InvalidArgument("stream cannot be nil")
 	}
@@ -171,7 +205,7 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 }
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
-func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
+func (s *StatementImplBase) ExecuteUpdate(ctx context.Context) (int64, error) {
 	if err := s.connectionImpl.ClearPending(); err != nil {
 		return -1, err
 	}
@@ -198,10 +232,11 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 	var res sql.Result
 	var err error
 
+	params := s.Derived.GetAdditionalExecParams()
 	if s.stmt != nil {
-		res, err = s.stmt.ExecContext(ctx)
+		res, err = s.stmt.ExecContext(ctx, params...)
 	} else {
-		res, err = s.conn.ExecContext(ctx, s.query)
+		res, err = s.conn.ExecContext(ctx, s.query, params...)
 	}
 	if err != nil {
 		return -1, s.Base().ErrorHelper.WrapIO(err, "failed to execute statement")
@@ -214,7 +249,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 }
 
 // ExecuteSchema returns the Arrow schema by querying zero rows
-func (s *statementImpl) ExecuteSchema(ctx context.Context) (schema *arrow.Schema, err error) {
+func (s *StatementImplBase) ExecuteSchema(ctx context.Context) (schema *arrow.Schema, err error) {
 	if s.query == "" {
 		return nil, s.Base().ErrorHelper.InvalidState("no query set")
 	}
@@ -259,7 +294,7 @@ func (c closer) Close() error {
 }
 
 // ExecuteQuery runs a SELECT and returns a RecordReader for streaming Arrow records
-func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordReader, rowCount int64, err error) {
+func (s *StatementImplBase) ExecuteQuery(ctx context.Context) (reader array.RecordReader, rowCount int64, err error) {
 	if s.bulkIngestOptions.IsSet() {
 		rowCount, err = s.executeBulkIngest(ctx)
 		return
@@ -275,10 +310,11 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 
 	// Create the record reader implementation with all the state
 	impl := &sqlRecordReaderImpl{
-		conn:          s.conn,
-		query:         s.query,
-		stmt:          s.stmt,
-		typeConverter: s.typeConverter,
+		conn:             s.conn,
+		query:            s.query,
+		stmt:             s.stmt,
+		typeConverter:    s.typeConverter,
+		additionalParams: s.Derived.GetAdditionalExecParams(),
 	}
 
 	// Let BaseRecordReader handle parameterized vs non-parameterized logic
@@ -290,7 +326,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 	// TODO(lidavidm): when given ctx is cancelled, cancel the query, but
 	// not in a way that breaks the connection!
 	options := driverbase.BaseRecordReaderOptions{
-		BatchRowLimit: int64(s.batchSize),
+		BatchRowLimit: s.batchSize,
 	}
 	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.connectionImpl.Base().Logger, s.boundStream,
 		options, impl); err != nil {
@@ -308,7 +344,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (reader array.RecordRe
 }
 
 // Close shuts down the prepared stmt (if any) and releases bound resources
-func (s *statementImpl) Close(ctx context.Context) error {
+func (s *StatementImplBase) Close(ctx context.Context) error {
 	// Check if already closed
 	if s.closed {
 		return s.Base().ErrorHelper.InvalidState("statement already closed")
@@ -331,7 +367,7 @@ func (s *statementImpl) Close(ctx context.Context) error {
 	return s.StatementImplBase.Close(ctx)
 }
 
-func (s *statementImpl) Prepare(ctx context.Context) (err error) {
+func (s *StatementImplBase) Prepare(ctx context.Context) (err error) {
 	if s.query == "" {
 		return s.Base().ErrorHelper.InvalidArgument("no query to prepare")
 	}
@@ -356,7 +392,7 @@ func (s *statementImpl) Prepare(ctx context.Context) (err error) {
 }
 
 // SetBatchSize configures the batch size for streaming operations
-func (s *statementImpl) SetBatchSize(size int) error {
+func (s *StatementImplBase) SetBatchSize(size int64) error {
 	if size <= 0 {
 		return s.Base().ErrorHelper.InvalidArgument("batch size must be positive")
 	}
@@ -365,7 +401,7 @@ func (s *statementImpl) SetBatchSize(size int) error {
 }
 
 // executeBulkUpdate executes bulk updates by iterating through the bound stream directly
-func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected int64, err error) {
+func (s *StatementImplBase) executeBulkUpdate(ctx context.Context) (totalAffected int64, err error) {
 	if s.query == "" {
 		return -1, s.Base().ErrorHelper.InvalidArgument("no query set")
 	}
@@ -390,6 +426,10 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 	}
 
 	params := make([]any, s.boundStream.Schema().NumFields())
+	additionalParams := s.Derived.GetAdditionalExecParams()
+	if len(additionalParams) > 0 {
+		params = append(params, additionalParams...)
+	}
 	for s.boundStream.Next() {
 		record := s.boundStream.RecordBatch()
 		for rowIdx := range int(record.NumRows()) {
@@ -425,7 +465,7 @@ func (s *statementImpl) executeBulkUpdate(ctx context.Context) (totalAffected in
 }
 
 // executeBulkIngest executes bulk ingest using the connection's ExecuteBulkIngest method
-func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
+func (s *StatementImplBase) executeBulkIngest(ctx context.Context) (int64, error) {
 	// Check for proper bulk ingest setup
 	if s.boundStream == nil {
 		return -1, s.Base().ErrorHelper.InvalidState("bulk ingest options are set but no stream is bound - call BindStream() first")
@@ -438,7 +478,7 @@ func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
 			s.boundStream = nil
 		}()
 
-		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.conn, &s.bulkIngestOptions, s.boundStream)
+		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.Derived, s.conn, &s.bulkIngestOptions, s.boundStream)
 		if err != nil {
 			return -1, err
 		}
@@ -460,6 +500,7 @@ func (s *statementImpl) executeBulkIngest(ctx context.Context) (int64, error) {
 //   - uses options.IngestBatchSize (defaults to 1000 if <= 0).
 func ExecuteBatchedBulkIngest(
 	ctx context.Context,
+	stmtImpl StatementImpl,
 	conn *LoggingConn,
 	options *driverbase.BulkIngestOptions,
 	stream array.RecordReader,
@@ -467,8 +508,20 @@ func ExecuteBatchedBulkIngest(
 	ingester BulkIngester,
 	errorHelper *driverbase.ErrorHelper,
 ) (totalRowsInserted int64, err error) {
-	if stream == nil {
-		return -1, errorHelper.InvalidArgument("stream cannot be nil")
+	if errorHelper == nil {
+		return -1, errors.New("errorHelper cannot be nil")
+	} else if stream == nil {
+		return -1, errorHelper.Internal("stream cannot be nil")
+	} else if stmtImpl == nil {
+		return -1, errorHelper.Internal("stmtImpl cannot be nil")
+	} else if conn == nil {
+		return -1, errorHelper.Internal("conn cannot be nil")
+	} else if options == nil {
+		return -1, errorHelper.Internal("options cannot be nil")
+	} else if typeConverter == nil {
+		return -1, errorHelper.Internal("typeConverter cannot be nil")
+	} else if ingester == nil {
+		return -1, errorHelper.Internal("ingester cannot be nil")
 	}
 
 	batchSize := options.IngestBatchSize
@@ -483,6 +536,7 @@ func ExecuteBatchedBulkIngest(
 	}
 
 	quotedTableName := ingester.QuoteIdentifier(options.TableName)
+	params := stmtImpl.GetAdditionalExecParams()
 
 	iterator, err := NewRowBufferIterator(stream, batchSize, typeConverter)
 	if err != nil {
@@ -500,6 +554,9 @@ func ExecuteBatchedBulkIngest(
 
 	for iterator.Next() {
 		buffer, rowCount := iterator.CurrentBatch()
+		if len(params) > 0 {
+			buffer = append(buffer, params...)
+		}
 
 		if rowCount == batchSize {
 			// Full batch: use pre-prepared statement

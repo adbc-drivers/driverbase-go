@@ -37,6 +37,10 @@ type ConnectionFactory interface {
 	) (ConnectionImpl, error)
 }
 
+type StatementFactory interface {
+	CreateStatement(stmt *StatementImplBase) (StatementImpl, error)
+}
+
 // DBFactory handles creation of *sql.DB from connection options.
 // Each driver is expected to implement this interface to provide database-specific
 // DSN construction and connection logic for their particular database format.
@@ -51,6 +55,7 @@ type Driver struct {
 	driverName        string
 	typeConverter     TypeConverter
 	connectionFactory ConnectionFactory
+	stmtFactory       StatementFactory
 	dbFactory         DBFactory
 	errorInspector    driverbase.ErrorInspector
 }
@@ -70,6 +75,7 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory 
 		driverName:        driverName,
 		typeConverter:     converter,
 		connectionFactory: nil, // No custom factory by default
+		stmtFactory:       nil,
 		dbFactory:         dbFactory,
 	}
 }
@@ -79,6 +85,11 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory 
 // with additional functionality like DbObjectsEnumerator.
 func (d *Driver) WithConnectionFactory(factory ConnectionFactory) *Driver {
 	d.connectionFactory = factory
+	return d
+}
+
+func (d *Driver) WithStatementFactory(factory StatementFactory) *Driver {
+	d.stmtFactory = factory
 	return d
 }
 
@@ -100,6 +111,7 @@ type databaseImpl struct {
 	typeConverter TypeConverter
 	// connectionFactory creates custom connection implementations if provided
 	connectionFactory ConnectionFactory
+	stmtFactory       StatementFactory
 }
 
 // NewDatabaseWithContext is the main entrypoint for driver‐agnostic ADBC database creation.
@@ -132,6 +144,7 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 		db:                sqlDB,
 		typeConverter:     d.typeConverter,
 		connectionFactory: d.connectionFactory,
+		stmtFactory:       d.stmtFactory,
 	}
 	return driverbase.NewDatabase(db), nil
 }

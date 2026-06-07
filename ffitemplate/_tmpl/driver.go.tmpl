@@ -60,6 +60,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/cgo"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"unsafe"
@@ -148,6 +149,7 @@ func setErrWithDetails(err *C.struct_AdbcError, adbcError adbc.Error) {
 		cErr.values = (**C.cuint8_t)(C.calloc(C.size_t(numDetails), C.size_t(unsafe.Sizeof((*C.cuint8_t)(nil)))))
 		cErr.lengths = (*C.size_t)(C.calloc(C.size_t(numDetails), C.sizeof_size_t))
 
+		// SAFETY: no copy of fromCArr because these are written to, not read from
 		keys := fromCArr[*C.cchar_t](cErr.keys, numDetails)
 		values := fromCArr[*C.cuint8_t](cErr.values, numDetails)
 		lengths := fromCArr[C.size_t](cErr.lengths, numDetails)
@@ -266,6 +268,7 @@ func getFromHandle[T any](ptr unsafe.Pointer) *T {
 func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusCode {
 	lenWithTerminator := C.size_t(len(val) + 1)
 	if lenWithTerminator <= *length {
+		// SAFETY: no copy of fromCArr because this is written to, not read from
 		sink := fromCArr[byte]((*byte)(unsafe.Pointer(out)), int(*length))
 		copy(sink, val)
 		sink[len(val)] = 0
@@ -276,6 +279,7 @@ func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusC
 
 func exportBytesOption(val []byte, out *C.uint8_t, length *C.size_t) C.AdbcStatusCode {
 	if C.size_t(len(val)) <= *length {
+		// SAFETY: no copy of fromCArr because this is written to, not read from
 		sink := fromCArr[byte]((*byte)(out), int(*length))
 		copy(sink, val)
 	}
@@ -703,7 +707,7 @@ func {{.Prefix}}DatabaseSetOptionBytes(db *C.struct_AdbcDatabase, key *C.cchar_t
 	}
 	cdb := getFromHandle[cDatabase](db.private_data)
 	k := C.GoString(key)
-	v := fromCArr[byte](value, int(length))
+	v := slices.Clone(fromCArr[byte](value, int(length)))
 
 	if cdb.db != nil {
 		e := cdb.db.SetOptionBytes(cdb.newContext(), k, v)
@@ -924,7 +928,7 @@ func {{.Prefix}}ConnectionSetOptionBytes(db *C.struct_AdbcConnection, key *C.cch
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	e := conn.cnxn.SetOptionBytes(conn.newContext(), C.GoString(key), fromCArr[byte](value, int(length)))
+	e := conn.cnxn.SetOptionBytes(conn.newContext(), C.GoString(key), slices.Clone(fromCArr[byte](value, int(length))))
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
@@ -1034,6 +1038,7 @@ func {{.Prefix}}ConnectionRelease(cnxn *C.struct_AdbcConnection, err *C.struct_A
 	return C.AdbcStatusCode(errToAdbcErr(err, conn.cnxn.Close(conn.newContext())))
 }
 
+// SAFETY: at each call site, consider whether a copy of the resulting slice must be made
 func fromCArr[T, CType any](ptr *CType, sz int) []T {
 	if ptr == nil || sz == 0 {
 		return nil
@@ -1106,7 +1111,7 @@ func {{.Prefix}}ConnectionGetInfo(cnxn *C.struct_AdbcConnection, codes *C.cuint3
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	infoCodes := fromCArr[adbc.InfoCode](codes, int(len))
+	infoCodes := slices.Clone(fromCArr[adbc.InfoCode](codes, int(len)))
 	rdr, e := conn.cnxn.GetInfo(conn.newContext(), infoCodes)
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -1247,7 +1252,7 @@ func {{.Prefix}}ConnectionReadPartition(cnxn *C.struct_AdbcConnection, serialize
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	rdr, e := conn.cnxn.ReadPartition(conn.newContext(), fromCArr[byte](serialized, int(serializedLen)))
+	rdr, e := conn.cnxn.ReadPartition(conn.newContext(), slices.Clone(fromCArr[byte](serialized, int(serializedLen))))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
@@ -1605,7 +1610,7 @@ func {{.Prefix}}StatementSetSubstraitPlan(stmt *C.struct_AdbcStatement, plan *C.
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-        e := st.stmt.SetSubstraitPlan(st.newContext(), fromCArr[byte](plan, int(length)))
+        e := st.stmt.SetSubstraitPlan(st.newContext(), slices.Clone(fromCArr[byte](plan, int(length))))
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
@@ -1706,7 +1711,7 @@ func {{.Prefix}}StatementSetOptionBytes(db *C.struct_AdbcStatement, key *C.cchar
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
-        e := opts.SetOptionBytes(st.newContext(), C.GoString(key), fromCArr[byte](value, int(length)))
+        e := opts.SetOptionBytes(st.newContext(), C.GoString(key), slices.Clone(fromCArr[byte](value, int(length))))
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
@@ -1808,6 +1813,7 @@ func {{.Prefix}}StatementExecutePartitions(stmt *C.struct_AdbcStatement, schema 
 		totalLen += len(p)
 	}
 	partitions.private_data = C.calloc(C.size_t(totalLen), C.size_t(1))
+	// SAFETY: no copy of fromCArr because this is written to, not read from
 	dst := fromCArr[byte]((*byte)(partitions.private_data), totalLen)
 
 	partIDs := fromCArr[*C.cuint8_t](partitions.partitions, int(partitions.num_partitions))
@@ -1829,9 +1835,11 @@ func AdbcDriver{{.Prefix}}Init(version C.int, rawDriver *C.void, err *C.struct_A
 
 	switch version {
 	case C.ADBC_VERSION_1_0_0:
+		// SAFETY: no copy of fromCArr because this is written to, not read from
 		sink := fromCArr[byte]((*byte)(unsafe.Pointer(driver)), C.ADBC_DRIVER_1_0_0_SIZE)
 		memory.Set(sink, 0)
 	case C.ADBC_VERSION_1_1_0:
+		// SAFETY: no copy of fromCArr because this is written to, not read from
 		sink := fromCArr[byte]((*byte)(unsafe.Pointer(driver)), C.ADBC_DRIVER_1_1_0_SIZE)
 		memory.Set(sink, 0)
 	default:
