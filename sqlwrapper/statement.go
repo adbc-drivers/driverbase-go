@@ -33,8 +33,10 @@ import (
 type BulkIngester interface {
 	ExecuteBulkIngest(ctx context.Context, stmt StatementImpl, conn *LoggingConn, options *driverbase.BulkIngestOptions, stream array.RecordReader) (int64, error)
 
-	// QuoteIdentifier quotes a table/column identifier for SQL
-	QuoteIdentifier(name string) string
+	// QuoteIdentifiers quotes each identifier part and joins them into a single
+	// qualified name (e.g. catalog.schema.table). The driver decides quoting
+	// and the join separator. Empty parts must be pre-filtered by the caller.
+	QuoteIdentifiers(parts []string) string
 
 	// GetPlaceholder returns the SQL placeholder for a field at the given parameter index (0-based)
 	// Examples: "?" for MySQL/Trino, "$1" for PostgreSQL (index+1), "CAST(? AS REAL)" for special types
@@ -494,7 +496,7 @@ func (s *StatementImplBase) executeBulkIngest(ctx context.Context) (int64, error
 // It generates multi-row INSERT statements like: INSERT INTO table VALUES (row1), (row2), ..., (rowN)
 //
 // Parameters:
-//   - ingester: provides QuoteIdentifier and GetPlaceholder helpers
+//   - ingester: provides QuoteIdentifiers and GetPlaceholder helpers
 //
 // Batching behavior:
 //   - uses options.IngestBatchSize (defaults to 1000 if <= 0).
@@ -535,7 +537,15 @@ func ExecuteBatchedBulkIngest(
 		return 0, errorHelper.InvalidArgument("stream has no columns")
 	}
 
-	quotedTableName := ingester.QuoteIdentifier(options.TableName)
+	nameParts := make([]string, 0, 3)
+	if options.CatalogName != "" {
+		nameParts = append(nameParts, options.CatalogName)
+	}
+	if options.SchemaName != "" {
+		nameParts = append(nameParts, options.SchemaName)
+	}
+	nameParts = append(nameParts, options.TableName)
+	quotedTableName := ingester.QuoteIdentifiers(nameParts)
 	params := stmtImpl.GetAdditionalExecParams()
 
 	iterator, err := NewRowBufferIterator(stream, batchSize, typeConverter)
