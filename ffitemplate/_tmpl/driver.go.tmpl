@@ -57,6 +57,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"runtime"
 	"runtime/cgo"
@@ -266,10 +267,10 @@ func getFromHandle[T any](ptr unsafe.Pointer) *T {
 }
 
 func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusCode {
-	lenWithTerminator := C.size_t(len(val) + 1)
+	lenWithTerminator := C.size_t(len(val)+1)
 	if lenWithTerminator <= *length {
 		// SAFETY: no copy of fromCArr because this is written to, not read from
-		sink := fromCArr[byte]((*byte)(unsafe.Pointer(out)), int(*length))
+		sink := fromCArr[byte]((*byte)(unsafe.Pointer(out)), len(val)+1)
 		copy(sink, val)
 		sink[len(val)] = 0
 	}
@@ -280,7 +281,7 @@ func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusC
 func exportBytesOption(val []byte, out *C.uint8_t, length *C.size_t) C.AdbcStatusCode {
 	if C.size_t(len(val)) <= *length {
 		// SAFETY: no copy of fromCArr because this is written to, not read from
-		sink := fromCArr[byte]((*byte)(out), int(*length))
+		sink := fromCArr[byte]((*byte)(out), len(val))
 		copy(sink, val)
 	}
 	*length = C.size_t(len(val))
@@ -707,7 +708,11 @@ func {{.Prefix}}DatabaseSetOptionBytes(db *C.struct_AdbcDatabase, key *C.cchar_t
 	}
 	cdb := getFromHandle[cDatabase](db.private_data)
 	k := C.GoString(key)
-	v := slices.Clone(fromCArr[byte](value, int(length)))
+	var safeLen int
+	if safeLen, code = checkLengthToInt(length, err); code != C.ADBC_STATUS_OK {
+		return code
+	}
+	v := C.GoBytes(unsafe.Pointer(value), C.int(safeLen))
 
 	if cdb.db != nil {
 		e := cdb.db.SetOptionBytes(cdb.newContext(), k, v)
@@ -928,7 +933,11 @@ func {{.Prefix}}ConnectionSetOptionBytes(db *C.struct_AdbcConnection, key *C.cch
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	e := conn.cnxn.SetOptionBytes(conn.newContext(), C.GoString(key), slices.Clone(fromCArr[byte](value, int(length))))
+	var safeLen int
+	if safeLen, code = checkLengthToInt(length, err); code != C.ADBC_STATUS_OK {
+		return code
+	}
+	e := conn.cnxn.SetOptionBytes(conn.newContext(), C.GoString(key), C.GoBytes(unsafe.Pointer(value), C.int(safeLen)))
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
@@ -1047,6 +1056,14 @@ func fromCArr[T, CType any](ptr *CType, sz int) []T {
 	return unsafe.Slice((*T)(unsafe.Pointer(ptr)), sz)
 }
 
+func checkLengthToInt(length C.size_t, err *C.struct_AdbcError) (int, C.AdbcStatusCode) {
+	if length > C.size_t(math.MaxInt) {
+		setErr(err, "Length %d exceeds max Go int %d", length, math.MaxInt)
+		return 0, C.ADBC_STATUS_INVALID_ARGUMENT
+	}
+	return int(length), C.ADBC_STATUS_OK
+}
+
 func toCdataStream(ptr *C.struct_ArrowArrayStream) *cdata.CArrowArrayStream {
 	return (*cdata.CArrowArrayStream)(unsafe.Pointer(ptr))
 }
@@ -1111,7 +1128,11 @@ func {{.Prefix}}ConnectionGetInfo(cnxn *C.struct_AdbcConnection, codes *C.cuint3
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	infoCodes := slices.Clone(fromCArr[adbc.InfoCode](codes, int(len)))
+	var safeLen int
+	if safeLen, code = checkLengthToInt(len, err); code != C.ADBC_STATUS_OK {
+		return code
+	}
+	infoCodes := slices.Clone(fromCArr[adbc.InfoCode](codes, safeLen))
 	rdr, e := conn.cnxn.GetInfo(conn.newContext(), infoCodes)
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -1252,7 +1273,11 @@ func {{.Prefix}}ConnectionReadPartition(cnxn *C.struct_AdbcConnection, serialize
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-	rdr, e := conn.cnxn.ReadPartition(conn.newContext(), slices.Clone(fromCArr[byte](serialized, int(serializedLen))))
+	var safeLen int
+	if safeLen, code = checkLengthToInt(serializedLen, err); code != C.ADBC_STATUS_OK {
+		return code
+	}
+	rdr, e := conn.cnxn.ReadPartition(conn.newContext(), C.GoBytes(unsafe.Pointer(serialized), C.int(safeLen)))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
@@ -1610,7 +1635,11 @@ func {{.Prefix}}StatementSetSubstraitPlan(stmt *C.struct_AdbcStatement, plan *C.
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
-        e := st.stmt.SetSubstraitPlan(st.newContext(), slices.Clone(fromCArr[byte](plan, int(length))))
+	var safeLen int
+	if safeLen, code = checkLengthToInt(length, err); code != C.ADBC_STATUS_OK {
+		return code
+	}
+	e := st.stmt.SetSubstraitPlan(st.newContext(), C.GoBytes(unsafe.Pointer(plan), C.int(safeLen)))
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
@@ -1711,7 +1740,12 @@ func {{.Prefix}}StatementSetOptionBytes(db *C.struct_AdbcStatement, key *C.cchar
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
-        e := opts.SetOptionBytes(st.newContext(), C.GoString(key), slices.Clone(fromCArr[byte](value, int(length))))
+
+	var safeLen int
+	if safeLen, code = checkLengthToInt(length, err); code != C.ADBC_STATUS_OK {
+		return code
+	}
+	e := opts.SetOptionBytes(st.newContext(), C.GoString(key), C.GoBytes(unsafe.Pointer(value), C.int(safeLen)))
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
