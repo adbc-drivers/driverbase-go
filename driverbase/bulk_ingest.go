@@ -324,6 +324,20 @@ func (bi *BulkIngestManager) Init() error {
 	} else if bi.Options.CatalogName != "" && bi.Options.SchemaName == "" {
 		return bi.ErrorHelper.InvalidState("cannot specify catalog name without schema name")
 	}
+	if bi.Options.ReadDepth < 1 {
+		return bi.ErrorHelper.InvalidArgument("read depth must be at least 1, got %d", bi.Options.ReadDepth)
+	} else if bi.Options.WriterParallelism < 1 {
+		return bi.ErrorHelper.InvalidArgument("writer parallelism must be at least 1, got %d", bi.Options.WriterParallelism)
+	} else if bi.Options.UploaderParallelism < 1 {
+		return bi.ErrorHelper.InvalidArgument("uploader parallelism must be at least 1, got %d", bi.Options.UploaderParallelism)
+	} else if bi.Options.MaxPendingBuffers < 1 {
+		return bi.ErrorHelper.InvalidArgument("max pending buffers must be at least 1, got %d", bi.Options.MaxPendingBuffers)
+	} else if bi.Options.WriterProps.MaxBytes <= 0 {
+		return bi.ErrorHelper.InvalidArgument("max bytes must be positive, got %d", bi.Options.WriterProps.MaxBytes)
+	} else if bi.Options.WriterProps.ParquetWriterProps == nil {
+		// Should only happen if the driver dev didn't initialize with NewBulkIngestOptions
+		return bi.ErrorHelper.Internal("BulkIngestOptions was not initialized")
+	}
 
 	return nil
 }
