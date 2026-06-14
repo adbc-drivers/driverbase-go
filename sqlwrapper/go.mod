@@ -17,12 +17,12 @@ module github.com/adbc-drivers/driverbase-go/sqlwrapper
 go 1.26.0
 
 require (
-	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20260608002410-49f9e21a1d4a
+	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20260614222945-5966df88680b
 	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-20250812031148-e2a26ef1320d
 	github.com/apache/arrow-adbc/go/adbc v1.11.0
 	github.com/apache/arrow-go/v18 v18.6.0
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/exp v0.0.0-20260603202125-055de637280b
+	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
 )
 
 require (
@@ -52,14 +52,14 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
-	golang.org/x/mod v0.36.0 // indirect
-	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
-	golang.org/x/tools v0.45.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	golang.org/x/mod v0.37.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/tools v0.46.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260610212136-7ab31c22f7ad // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
