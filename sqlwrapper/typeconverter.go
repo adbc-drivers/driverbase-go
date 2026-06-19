@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,7 @@ type ColumnType struct {
 	Length           *int64
 	Precision        *int64
 	Scale            *int64
+	ScanType         reflect.Type
 }
 
 // Inserter handles SQL-to-Arrow value conversion and builder appending for a specific Arrow type
@@ -855,6 +857,7 @@ func ConvertColumnType(colType *sql.ColumnType, typeConverter TypeConverter) (ar
 		Length:           length,
 		Precision:        precision,
 		Scale:            scale,
+		ScanType:         colType.ScanType(),
 	}
 
 	return typeConverter.ConvertRawColumnType(ourColType)
