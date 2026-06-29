@@ -15,6 +15,7 @@
 package arrowext_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase/arrowext"
@@ -24,107 +25,133 @@ import (
 
 func TestGetGeoArrowSrid(t *testing.T) {
 	for _, testCase := range []struct {
-		name     string
-		input    string
-		expected int
-		ok       bool
+		name  string
+		input string
+		srid  int
+		edges string
 	}{
 		{
-			name:     "empty",
-			input:    ``,
-			expected: 0,
-			ok:       false,
+			name:  "empty",
+			input: ``,
+			srid:  0,
 		},
 		{
-			name:     "invalid json",
-			input:    `{`,
-			expected: 0,
-			ok:       false,
+			name:  "invalid json",
+			input: `{`,
+			srid:  0,
 		},
 		{
-			name:     "string format 4326",
-			input:    `{"crs":"EPSG:4326"}`,
-			expected: 4326,
-			ok:       true,
+			name:  "invalid JSON 2",
+			input: `not json`,
+			srid:  0,
+			edges: "",
 		},
 		{
-			name:     "string format 3857",
-			input:    `{"crs":"EPSG:3857"}`,
-			expected: 3857,
-			ok:       true,
+			name:  "no CRS",
+			input: `{"edges":"planar"}`,
+			srid:  0,
+			edges: "planar",
 		},
 		{
-			name:     "string format missing EPSG",
-			input:    `{"crs":"WGS84"}`,
-			expected: 0,
-			ok:       false,
+			name:  "string format 4326",
+			input: `{"crs":"EPSG:4326"}`,
+			srid:  4326,
 		},
 		{
-			name:     "projjson like format 4326",
-			input:    `{"crs":{"id":{"authority":"EPSG","code":4326}}}`,
-			expected: 4326,
-			ok:       true,
+			name:  "string format 4326 with edges",
+			input: `{"crs":"EPSG:4326", "edges":"spherical"}`,
+			srid:  4326,
+			edges: "spherical",
+		},
+		{"string format wgs84", `{"crs":"OGC:CRS84"}`, 4326, ""},
+		{
+			name:  "string format wgs84 with edges",
+			input: `{"crs":"OGC:CRS84", "edges":"spherical"}`,
+			srid:  4326,
+			edges: "spherical",
 		},
 		{
-			name:     "projjson like format string code",
-			input:    `{"crs":{"id":{"authority":"EPSG","code":"3857"}}}`,
-			expected: 3857,
-			ok:       true,
+			name:  "string format 3857",
+			input: `{"crs":"EPSG:3857"}`,
+			srid:  3857,
 		},
 		{
-			name:     "projjson like format wrong authority",
-			input:    `{"crs":{"id":{"authority":"OGC","code":4326}}}`,
-			expected: 0,
-			ok:       false,
+			name:  "string format 3857 with edges",
+			input: `{"crs":"EPSG:3857","edges":"spherical"}`,
+			srid:  3857,
+			edges: "spherical",
 		},
 		{
-			name:     "projjson like format lowercase epsg",
-			input:    `{"crs":{"id":{"authority":"epsg","code":4326}}}`,
-			expected: 4326,
-			ok:       true,
+			name:  "string format missing EPSG",
+			input: `{"crs":"WGS84"}`,
+			srid:  0,
 		},
 		{
-			name:     "projjson missing code",
-			input:    `{"crs":{"id":{"authority":"EPSG"}}}`,
-			expected: 0,
-			ok:       false,
+			name:  "projjson like format 4326",
+			input: `{"crs":{"id":{"authority":"EPSG","code":4326}}}`,
+			srid:  4326,
 		},
 		{
-			name:     "projjson bad nesting",
-			input:    `{"crs":{"authority":"EPSG","code":4326}}`,
-			expected: 0,
-			ok:       false,
+			name:  "projjson like format 4326 with edges",
+			input: `{"crs":{"id":{"authority":"EPSG","code":"4326"}},"edges":"spherical"}`,
+			srid:  4326,
+			edges: "spherical",
 		},
+		{
+			name:  "projjson wgs84",
+			input: `{"crs":{"id":{"authority":"OGC","code":"CRS84"}}}`,
+			srid:  4326,
+		},
+		{
+			name:  "projjson wgs84 with edges",
+			input: `{"crs":{"id":{"authority":"OGC","code":"CRS84"}}, "edges":"spherical"}`,
+			srid:  4326,
+			edges: "spherical",
+		},
+		{
+			name:  "projjson like format string code",
+			input: `{"crs":{"id":{"authority":"EPSG","code":"3857"}}}`,
+			srid:  3857,
+		},
+		{
+			name:  "projjson like format wrong authority",
+			input: `{"crs":{"id":{"authority":"OGC","code":4326}}}`,
+			srid:  0,
+		},
+		{
+			name:  "projjson like format lowercase epsg",
+			input: `{"crs":{"id":{"authority":"epsg","code":4326}}}`,
+			srid:  4326,
+		},
+		{
+			name:  "projjson missing code",
+			input: `{"crs":{"id":{"authority":"EPSG"}}}`,
+			srid:  0,
+		},
+		{
+			name:  "projjson bad nesting",
+			input: `{"crs":{"authority":"EPSG","code":4326}}`,
+			srid:  0,
+		},
+		{"null CRS", `{"crs":null}`, 0, ""},
 	} {
-		t.Run(testCase.name+" (wkb)", func(t *testing.T) {
-			field := &arrow.Field{
-				Name:     "test",
-				Type:     arrow.BinaryTypes.Binary,
-				Nullable: true,
-				Metadata: arrow.MetadataFrom(map[string]string{
-					"ARROW:extension:name":     "geoarrow.wkb",
-					"ARROW:extension:metadata": testCase.input,
-				}),
-			}
-			srid, ok := arrowext.ExtractGeoArrowSrid(field)
-			assert.Equal(t, testCase.ok, ok)
-			assert.Equal(t, testCase.expected, srid)
-		})
-
-		t.Run(testCase.name+" (wkt)", func(t *testing.T) {
-			field := &arrow.Field{
-				Name:     "test",
-				Type:     arrow.BinaryTypes.Binary,
-				Nullable: true,
-				Metadata: arrow.MetadataFrom(map[string]string{
-					"ARROW:extension:name":     "geoarrow.wkt",
-					"ARROW:extension:metadata": testCase.input,
-				}),
-			}
-			srid, ok := arrowext.ExtractGeoArrowSrid(field)
-			assert.Equal(t, testCase.ok, ok)
-			assert.Equal(t, testCase.expected, srid)
-		})
+		for _, wkType := range []string{"wkb", "wkt"} {
+			name := fmt.Sprintf("%s (%s)", testCase.name, wkType)
+			t.Run(name, func(t *testing.T) {
+				field := &arrow.Field{
+					Name:     "test",
+					Type:     arrow.BinaryTypes.Binary,
+					Nullable: true,
+					Metadata: arrow.MetadataFrom(map[string]string{
+						"ARROW:extension:name":     "geoarrow." + wkType,
+						"ARROW:extension:metadata": testCase.input,
+					}),
+				}
+				srid, edges := arrowext.ExtractGeoArrowSrid(field)
+				assert.Equal(t, testCase.srid, srid)
+				assert.Equal(t, testCase.edges, edges)
+			})
+		}
 	}
 }
 
@@ -139,9 +166,9 @@ func TestGetGeoArrowSridInvalid(t *testing.T) {
 				"ARROW:extension:metadata": `{"crs":"EPSG:4326"}`,
 			}),
 		}
-		srid, ok := arrowext.ExtractGeoArrowSrid(field)
-		assert.False(t, ok)
+		srid, edges := arrowext.ExtractGeoArrowSrid(field)
 		assert.Equal(t, 0, srid)
+		assert.Equal(t, "", edges)
 	})
 
 	t.Run("no metadata", func(t *testing.T) {
@@ -153,8 +180,8 @@ func TestGetGeoArrowSridInvalid(t *testing.T) {
 				"ARROW:extension:name": "geoarrow.wkb",
 			}),
 		}
-		srid, ok := arrowext.ExtractGeoArrowSrid(field)
-		assert.False(t, ok)
+		srid, edges := arrowext.ExtractGeoArrowSrid(field)
 		assert.Equal(t, 0, srid)
+		assert.Equal(t, "", edges)
 	})
 }

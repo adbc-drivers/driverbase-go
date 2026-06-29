@@ -16,82 +16,100 @@ package arrowext
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
-func ExtractGeoArrowSrid(field *arrow.Field) (int, bool) {
+// extractSRIDFromMeta extracts the SRID and edges from GeoArrow extension
+// metadata string.  The metadata is a JSON string that may contain a "crs"
+// field.
+//
+// Supported formats:
+//   - PROJJSON: {"crs": {"id": {"authority": "EPSG", "code": 4326}}}
+//   - Simple string: "EPSG:4326" (as CRS value)
+//
+// Returns 0 if no SRID can be determined.
+func ExtractGeoArrowSridFromMetadata(metadata string) (int, string) {
+	if metadata == "" {
+		return 0, ""
+	}
+
+	type projID struct {
+		Authority string `json:"authority"`
+		Code      int    `json:"code"`
+	}
+	type projCRS struct {
+		ID projID `json:"id"`
+	}
+
+	type projIDString struct {
+		Authority string `json:"authority"`
+		Code      string `json:"code"`
+	}
+	type projCRSString struct {
+		ID projIDString `json:"id"`
+	}
+
+	type geoarrowMeta struct {
+		CRS   json.RawMessage `json:"crs"`
+		Edges string          `json:"edges"`
+	}
+
+	var meta geoarrowMeta
+	if err := json.Unmarshal([]byte(metadata), &meta); err != nil {
+		return 0, ""
+	}
+
+	if len(meta.CRS) == 0 {
+		return 0, meta.Edges
+	}
+
+	// CRS can be a string like "EPSG:4326" or a PROJJSON object
+	var crsStr string
+	if err := json.Unmarshal(meta.CRS, &crsStr); err == nil {
+		if strings.HasPrefix(crsStr, "EPSG:") {
+			if code, err := strconv.Atoi(crsStr[5:]); err == nil {
+				return code, meta.Edges
+			}
+		} else if crsStr == "OGC:CRS84" {
+			return 4326, meta.Edges
+		}
+		return 0, meta.Edges
+	}
+
+	var crs projCRS
+	if err := json.Unmarshal(meta.CRS, &crs); err == nil {
+		if strings.EqualFold(crs.ID.Authority, "EPSG") && crs.ID.Code != 0 {
+			return crs.ID.Code, meta.Edges
+		}
+	}
+
+	var crsString projCRSString
+	if err := json.Unmarshal(meta.CRS, &crsString); err == nil {
+		if strings.EqualFold(crsString.ID.Authority, "EPSG") {
+			if code, err := strconv.Atoi(crsString.ID.Code); err == nil {
+				return code, meta.Edges
+			}
+		} else if strings.EqualFold(crsString.ID.Authority, "OGC") && strings.EqualFold(crsString.ID.Code, "CRS84") {
+			return 4326, meta.Edges
+		}
+	}
+
+	return 0, meta.Edges
+}
+
+func ExtractGeoArrowSrid(field *arrow.Field) (int, string) {
 	ext := GetExtensionName(field)
 	if ext != "geoarrow.wkb" && ext != "geoarrow.wkt" {
-		return 0, false
+		return 0, ""
 	}
 
 	metadata, mdOk := field.Metadata.GetValue("ARROW:extension:metadata")
 	if !mdOk {
-		return 0, false
-	} else if metadata == "" {
-		return 0, false
+		return 0, ""
 	}
 
-	var md map[string]any
-	if err := json.Unmarshal([]byte(metadata), &md); err != nil {
-		return 0, false
-	}
-	rawCrs, ok := md["crs"]
-	if !ok {
-		return 0, false
-	}
-
-	if crsStr, ok := rawCrs.(string); ok {
-		if !strings.HasPrefix(crsStr, "EPSG:") {
-			return 0, false
-		}
-		var srid int
-		if _, err := fmt.Sscanf(crsStr, "EPSG:%d", &srid); err == nil {
-			return srid, true
-		}
-		return 0, false
-	}
-
-	if crsObj, ok := rawCrs.(map[string]any); ok {
-		idObjRaw, ok := crsObj["id"]
-		if !ok {
-			return 0, false
-		}
-
-		idObj, ok := idObjRaw.(map[string]any)
-		if !ok {
-			return 0, false
-		}
-
-		authRaw, ok := idObj["authority"]
-		if !ok {
-			return 0, false
-		}
-
-		auth, ok := authRaw.(string)
-		if !ok || strings.ToUpper(auth) != "EPSG" {
-			return 0, false
-		}
-
-		codeRaw, ok := idObj["code"]
-		if !ok {
-			return 0, false
-		}
-
-		if code, ok := codeRaw.(float64); ok {
-			return int(code), true
-		}
-
-		if codeStr, ok := codeRaw.(string); ok {
-			if srid, err := strconv.Atoi(codeStr); err == nil {
-				return srid, true
-			}
-		}
-	}
-
-	return 0, false
+	return ExtractGeoArrowSridFromMetadata(metadata)
 }
