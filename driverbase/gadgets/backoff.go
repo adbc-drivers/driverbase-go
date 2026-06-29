@@ -23,9 +23,13 @@ import (
 )
 
 func SleepCtx(ctx context.Context, duration time.Duration) error {
+	if ctx == nil {
+		time.Sleep(duration)
+		return nil
+	}
+
 	timer := time.NewTimer(duration)
 	defer timer.Stop()
-
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -71,7 +75,7 @@ func (b *Backoff) Next() time.Duration {
 
 func RetryWithLog(ctx context.Context, logger *slog.Logger, operation string, b *Backoff, maxTries int, op func() error) error {
 	if maxTries <= 0 {
-		return errors.New("driverbase.gadgets.Retry: maxTries must be > 0")
+		return errors.New("driverbase.gadgets.RetryWithLog: maxTries must be > 0")
 	}
 
 	if b == nil {
