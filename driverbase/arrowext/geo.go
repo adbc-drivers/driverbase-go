@@ -22,9 +22,9 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
-// extractSRIDFromMeta extracts the SRID and edges from GeoArrow extension
-// metadata string.  The metadata is a JSON string that may contain a "crs"
-// field.
+// ExtractGeoArrowSridFromMetadata extracts the SRID and edges from GeoArrow
+// extension metadata string.  The metadata is a JSON string that may contain
+// a "crs" field.
 //
 // Supported formats:
 //   - PROJJSON: {"crs": {"id": {"authority": "EPSG", "code": 4326}}}
