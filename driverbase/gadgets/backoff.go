@@ -22,6 +22,18 @@ import (
 	"time"
 )
 
+func SleepCtx(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // Backoff computes a retry interval with random jitter, similar to
 // gax.Backoff.
 type Backoff struct {
@@ -34,37 +46,43 @@ type Backoff struct {
 
 func (b *Backoff) Next() time.Duration {
 	// Defaults chosen somewhat arbitrarily
-	if b.Max == 0 {
+	if b.Max <= 0 {
 		b.Max = 10 * time.Second
 	}
-	if b.Start == 0 {
+	if b.Start <= 0 {
 		b.Start = time.Second
 	}
 	if b.Start > b.Max {
 		b.Start = b.Max
 	}
-	if b.currentMax == 0 {
-		b.currentMax = b.Start
-	}
-	if b.Mul == 0 {
+	if b.Mul <= 0 {
 		b.Mul = 1.5
+	}
+	if b.currentMax <= 0 {
+		b.currentMax = b.Start
 	}
 
 	// Random duration between 1ns and nextBackoff
 	// https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
-	backoff := time.Duration(rand.Int64N(1 + int64(b.currentMax)))
+	backoff := time.Duration(max(int64(1), rand.Int64N(1+int64(b.currentMax))))
 	b.currentMax = min(time.Duration(float64(b.currentMax)*b.Mul), b.Max)
 	return backoff
 }
 
 func RetryWithLog(ctx context.Context, logger *slog.Logger, operation string, b *Backoff, maxTries int, op func() error) error {
-	if maxTries == 0 {
+	if maxTries <= 0 {
 		return errors.New("driverbase.gadgets.Retry: maxTries must be > 0")
-	} else if b == nil {
+	}
+
+	if b == nil {
 		b = &Backoff{}
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	var err error
-	for range maxTries {
+	for i := range maxTries {
 		err = op()
 		if err == nil {
 			return nil
@@ -78,13 +96,19 @@ func RetryWithLog(ctx context.Context, logger *slog.Logger, operation string, b 
 		if logger != nil {
 			logger.DebugContext(ctx, "retrying: "+operation, "error", err, "backoff", pause)
 		}
-		time.Sleep(pause)
+		if i == maxTries-1 {
+			// Don't unnecessarily sleep on the last iteration
+			break
+		}
+		if err := SleepCtx(ctx, pause); err != nil {
+			return err
+		}
 	}
 	return err
 }
 
 func Retry(b *Backoff, maxTries int, op func() error) error {
-	return RetryWithLog(nil, nil, "", b, maxTries, op)
+	return RetryWithLog(context.Background(), nil, "", b, maxTries, op)
 }
 
 var errNoRetry = errors.New("operation failed and could not be retried")

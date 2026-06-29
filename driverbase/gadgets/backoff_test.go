@@ -139,3 +139,23 @@ func TestRetryLog(t *testing.T) {
 	assert.Contains(t, log, "fail 4")
 	t.Log(log)
 }
+
+func TestRetryCancel(t *testing.T) {
+	counter := 0
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	err := gadgets.RetryWithLog(ctx, logger, "foobar", &gadgets.Backoff{}, 1000, func() error {
+		counter += 1
+		return fmt.Errorf("fail %d", counter)
+	})
+
+	assert.Less(t, counter, 1000)
+	assert.ErrorIs(t, err, context.Canceled)
+}
