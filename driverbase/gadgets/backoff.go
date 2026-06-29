@@ -118,5 +118,8 @@ func Retry(b *Backoff, maxTries int, op func() error) error {
 var errNoRetry = errors.New("operation failed and could not be retried")
 
 func NoRetry(err error) error {
+	if err == nil {
+		return nil
+	}
 	return errors.Join(err, errNoRetry)
 }

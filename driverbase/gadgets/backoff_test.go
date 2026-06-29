@@ -152,6 +152,7 @@ func TestRetryCancel(t *testing.T) {
 		cancel()
 	}()
 	err := gadgets.RetryWithLog(ctx, logger, "foobar", &gadgets.Backoff{}, 1000, func() error {
+		time.Sleep(5 * time.Millisecond)
 		counter += 1
 		return fmt.Errorf("fail %d", counter)
 	})
