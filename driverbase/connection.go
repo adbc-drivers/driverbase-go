@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -487,6 +488,16 @@ func (cnxn *connection) GetObjects(ctx context.Context, depth adbc.ObjectDepth, 
 					tables, err := helper.GetTablesForDBSchema(ctxTablesInner, ValueOrZero(info.CatalogName), ValueOrZero(catalogDbSchema.DbSchemaName), tableName, columnName, includeColumns)
 					if err != nil {
 						return err
+					}
+
+					if len(tableType) > 0 {
+						filtered := tables[:0]
+						for _, t := range tables {
+							if slices.Contains(tableType, t.TableType) {
+								filtered = append(filtered, t)
+							}
+						}
+						tables = filtered
 					}
 
 					catalogDbSchema.DbSchemaTables = tables

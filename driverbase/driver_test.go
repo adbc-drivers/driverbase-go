@@ -349,6 +349,10 @@ func TestCustomizedDriver(t *testing.T) {
 									"constraint_column_names": ["col4"]
 								}
 							]
+						},
+						{
+							"table_name": "baz_view",
+							"table_type": "VIEW"
 						}
 					]
 				}
@@ -577,6 +581,10 @@ var dbObjects = map[string]map[string][]driverbase.TableInfo{
 					},
 				},
 			},
+			{
+				TableName: "baz_view",
+				TableType: "VIEW",
+			},
 		},
 	},
 }
@@ -732,6 +740,65 @@ func tableFromRecordReader(rdr array.RecordReader) arrow.Table {
 		recs = append(recs, rec)
 	}
 	return array.NewTableFromRecords(rdr.Schema(), recs)
+}
+
+func TestGetObjectsFiltersOnTableType(t *testing.T) {
+	var handler MockedHandler
+	handler.On("Handle", mock.Anything, mock.Anything).Return(nil)
+
+	ctx := context.TODO()
+	alloc := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer alloc.AssertSize(t, 0)
+
+	drv := NewDriver(alloc, &handler, true)
+
+	db, err := drv.NewDatabaseWithContext(ctx, nil)
+	require.NoError(t, err)
+	defer testutil.CheckedCloseWithContext(t, db, ctx)
+
+	cnxn, err := db.Open(ctx)
+	require.NoError(t, err)
+	defer testutil.CheckedCloseWithContext(t, cnxn, ctx)
+
+	// Request only VIEWs
+	dbObjects, err := cnxn.GetObjects(ctx, adbc.ObjectDepthAll, nil, nil, nil, nil, []string{"VIEW"})
+	require.NoError(t, err)
+	dbObjectsTable := tableFromRecordReader(dbObjects)
+	defer dbObjectsTable.Release()
+
+	expectedDbObjectsTable, err := array.TableFromJSON(alloc, adbc.GetObjectsSchema, []string{`[
+		{
+			"catalog_name": "default",
+			"catalog_db_schemas": [
+				{
+					"db_schema_name": "public",
+					"db_schema_tables": []
+				},
+				{
+					"db_schema_name": "test",
+					"db_schema_tables": []
+				}
+			]
+		},
+		{
+			"catalog_name": "my_db",
+			"catalog_db_schemas": [
+				{
+					"db_schema_name": "public",
+					"db_schema_tables": [
+						{
+							"table_name": "baz_view",
+							"table_type": "VIEW"
+						}
+					]
+				}
+			]
+		}
+	]`})
+	require.NoError(t, err)
+	defer expectedDbObjectsTable.Release()
+
+	require.Truef(t, array.TableEqual(expectedDbObjectsTable, dbObjectsTable), "expected: %s\ngot: %s", expectedDbObjectsTable, dbObjectsTable)
 }
 
 func TestRequiredList(t *testing.T) {
