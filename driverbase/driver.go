@@ -54,6 +54,10 @@ func init() {
 	}
 }
 
+func DriverVersion() string {
+	return infoDriverVersion
+}
+
 // DriverImpl is an interface that drivers implement to provide
 // vendor-specific functionality.
 type DriverImpl interface {
