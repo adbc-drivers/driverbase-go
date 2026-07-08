@@ -64,8 +64,8 @@ type StatementImpl interface {
 type StatementImplBase struct {
 	driverbase.StatementImplBase
 	Derived StatementImpl
+	Conn    *ConnectionImplBase
 
-	conn  *ConnectionImplBase
 	query string
 	// stmt holds the prepared statement, if Prepare() was called
 	stmt *LoggingStmt
@@ -92,7 +92,7 @@ func (s *StatementImplBase) MakeTypeConverter(vendorName string) TypeConverter {
 }
 
 func (s *StatementImplBase) makeTypeConverter() TypeConverter {
-	return s.Derived.MakeTypeConverter(s.conn.dbImpl.vendorName)
+	return s.Derived.MakeTypeConverter(s.Conn.Database.vendorName)
 }
 
 // newStatement constructs a new StatementImpl wrapped by driverbase
@@ -100,15 +100,15 @@ func newStatement(c *ConnectionImplBase) (adbc.StatementWithContext, error) {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	wrapper := &StatementImplBase{
 		StatementImplBase: base,
-		conn:              c,
+		Conn:              c,
 		batchSize:         1000, // Default batch size for streaming operations
 		bulkIngestOptions: driverbase.NewBulkIngestOptions(),
 	}
 
 	var impl StatementImpl
-	if c.dbImpl.stmtFactory != nil {
+	if c.Database.stmtFactory != nil {
 		var err error
-		impl, err = c.dbImpl.stmtFactory.CreateStatement(wrapper)
+		impl, err = c.Database.stmtFactory.CreateStatement(wrapper)
 		if err != nil {
 			return nil, err
 		}
@@ -121,7 +121,7 @@ func newStatement(c *ConnectionImplBase) (adbc.StatementWithContext, error) {
 
 // SetSqlQuery stores the SQL text on the statement
 func (s *StatementImplBase) SetSqlQuery(ctx context.Context, query string) error {
-	if err := s.conn.Derived.ClearPending(); err != nil {
+	if err := s.Conn.Derived.ClearPending(); err != nil {
 		return err
 	}
 
@@ -208,7 +208,7 @@ func (s *StatementImplBase) BindStream(ctx context.Context, stream array.RecordR
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
 func (s *StatementImplBase) ExecuteUpdate(ctx context.Context) (int64, error) {
-	if err := s.conn.Derived.ClearPending(); err != nil {
+	if err := s.Conn.Derived.ClearPending(); err != nil {
 		return -1, err
 	}
 
@@ -238,7 +238,7 @@ func (s *StatementImplBase) ExecuteUpdate(ctx context.Context) (int64, error) {
 	if s.stmt != nil {
 		res, err = s.stmt.ExecContext(ctx, params...)
 	} else {
-		res, err = s.conn.Conn.ExecContext(ctx, s.query, params...)
+		res, err = s.Conn.Conn.ExecContext(ctx, s.query, params...)
 	}
 	if err != nil {
 		return -1, s.Base().ErrorHelper.WrapIO(err, "failed to execute statement")
@@ -256,7 +256,7 @@ func (s *StatementImplBase) ExecuteSchema(ctx context.Context) (schema *arrow.Sc
 		return nil, s.Base().ErrorHelper.InvalidState("no query set")
 	}
 
-	if err := s.conn.Derived.ClearPending(); err != nil {
+	if err := s.Conn.Derived.ClearPending(); err != nil {
 		return nil, err
 	}
 
@@ -266,7 +266,7 @@ func (s *StatementImplBase) ExecuteSchema(ctx context.Context) (schema *arrow.Sc
 	var rows *LoggingRows
 
 	// Can't use prepared statement with modified query, fall back to direct execution
-	rows, err = s.conn.Conn.QueryContext(ctx, limitQuery)
+	rows, err = s.Conn.Conn.QueryContext(ctx, limitQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -306,13 +306,13 @@ func (s *StatementImplBase) ExecuteQuery(ctx context.Context) (reader array.Reco
 		return nil, -1, s.Base().ErrorHelper.InvalidState("no query set")
 	}
 
-	if err := s.conn.Derived.ClearPending(); err != nil {
+	if err := s.Conn.Derived.ClearPending(); err != nil {
 		return nil, -1, err
 	}
 
 	// Create the record reader implementation with all the state
 	impl := &sqlRecordReaderImpl{
-		conn:             s.conn.Conn,
+		conn:             s.Conn.Conn,
 		query:            s.query,
 		stmt:             s.stmt,
 		typeConverter:    s.makeTypeConverter(),
@@ -330,7 +330,7 @@ func (s *StatementImplBase) ExecuteQuery(ctx context.Context) (reader array.Reco
 	options := driverbase.BaseRecordReaderOptions{
 		BatchRowLimit: s.batchSize,
 	}
-	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.conn.Derived.Base().Logger, s.boundStream,
+	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.Conn.Derived.Base().Logger, s.boundStream,
 		options, impl); err != nil {
 		// Clear boundStream on error to prevent double-release in Close()
 		s.boundStream = nil
@@ -338,7 +338,7 @@ func (s *StatementImplBase) ExecuteQuery(ctx context.Context) (reader array.Reco
 	}
 	s.boundStream = nil
 
-	if err := s.conn.Derived.OfferPending(closer{baseRecordReader: baseRecordReader}); err != nil {
+	if err := s.Conn.Derived.OfferPending(closer{baseRecordReader: baseRecordReader}); err != nil {
 		return nil, -1, err
 	}
 
@@ -352,7 +352,7 @@ func (s *StatementImplBase) Close(ctx context.Context) error {
 		return s.Base().ErrorHelper.InvalidState("statement already closed")
 	}
 	s.closed = true
-	s.conn = nil
+	s.Conn = nil
 
 	// Release bound stream if any
 	if s.boundStream != nil {
@@ -374,7 +374,7 @@ func (s *StatementImplBase) Prepare(ctx context.Context) (err error) {
 		return s.Base().ErrorHelper.InvalidArgument("no query to prepare")
 	}
 
-	if err := s.conn.Derived.ClearPending(); err != nil {
+	if err := s.Conn.Derived.ClearPending(); err != nil {
 		return err
 	}
 
@@ -386,7 +386,7 @@ func (s *StatementImplBase) Prepare(ctx context.Context) (err error) {
 		s.stmt = nil
 	}
 
-	s.stmt, err = s.conn.Conn.PrepareContext(ctx, s.query)
+	s.stmt, err = s.Conn.Conn.PrepareContext(ctx, s.query)
 	if err != nil {
 		return s.Base().ErrorHelper.WrapIO(err, "failed to prepare statement")
 	}
@@ -418,7 +418,7 @@ func (s *StatementImplBase) executeBulkUpdate(ctx context.Context) (totalAffecte
 	if s.stmt != nil {
 		stmt = s.stmt
 	} else {
-		stmt, err = s.conn.Conn.PrepareContext(ctx, s.query)
+		stmt, err = s.Conn.Conn.PrepareContext(ctx, s.query)
 		if err != nil {
 			return -1, s.Base().ErrorHelper.WrapIO(err, "failed to prepare statement for batch execution")
 		}
@@ -475,13 +475,13 @@ func (s *StatementImplBase) executeBulkIngest(ctx context.Context) (int64, error
 	}
 
 	// Type-assert to the BulkIngester interface for database-specific implementations
-	if ingester, ok := s.conn.Derived.(BulkIngester); ok {
+	if ingester, ok := s.Conn.Derived.(BulkIngester); ok {
 		defer func() {
 			s.boundStream.Release()
 			s.boundStream = nil
 		}()
 
-		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.Derived, s.conn.Conn, &s.bulkIngestOptions, s.boundStream)
+		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.Derived, s.Conn.Conn, &s.bulkIngestOptions, s.boundStream)
 		if err != nil {
 			return -1, err
 		}

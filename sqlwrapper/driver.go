@@ -25,6 +25,10 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
+type DatabaseFactory interface {
+	CreateDatabase(db *DatabaseImplBase) (DatabaseImpl, error)
+}
+
 // ConnectionFactory allows custom connection implementations to be injected into sqlwrapper.
 // Implementations can provide database-specific functionality like DbObjectsEnumerator.
 type ConnectionFactory interface {
@@ -53,6 +57,7 @@ type Driver struct {
 	driverbase.DriverImplBase
 	driverName        string
 	vendorName        string
+	databaseFactory   DatabaseFactory
 	connectionFactory ConnectionFactory
 	stmtFactory       StatementFactory
 	dbFactory         DBFactory
@@ -69,10 +74,16 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory 
 		DriverImplBase:    base,
 		driverName:        driverName,
 		vendorName:        vendorName,
-		connectionFactory: nil, // No custom factory by default
+		databaseFactory:   nil, // No custom factory by default
+		connectionFactory: nil,
 		stmtFactory:       nil,
 		dbFactory:         dbFactory,
 	}
+}
+
+func (d *Driver) WithDatabaseFactory(factory DatabaseFactory) *Driver {
+	d.databaseFactory = factory
+	return d
 }
 
 // WithConnectionFactory sets a custom connection factory for this driver.
@@ -96,9 +107,14 @@ func (d *Driver) WithErrorInspector(inspector driverbase.ErrorInspector) *Driver
 	return d
 }
 
-// databaseImpl implements the ADBC Database interface on top of database/sql.
-type databaseImpl struct {
+type DatabaseImpl interface {
+	driverbase.DatabaseImpl
+}
+
+// DatabaseImplBase implements the ADBC Database interface on top of database/sql.
+type DatabaseImplBase struct {
 	driverbase.DatabaseImplBase
+	Derived DatabaseImpl
 
 	// db is the Go SQL handle (connection pool)
 	db         *sql.DB
@@ -133,22 +149,34 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 	}
 
 	// Construct and return the ADBC Database wrapper
-	db := &databaseImpl{
+	wrapper := &DatabaseImplBase{
 		DatabaseImplBase:  base,
 		db:                sqlDB,
 		vendorName:        d.vendorName,
 		connectionFactory: d.connectionFactory,
 		stmtFactory:       d.stmtFactory,
 	}
-	return driverbase.NewDatabase(db), nil
+
+	var impl DatabaseImpl
+	if d.databaseFactory != nil {
+		impl, err = d.databaseFactory.CreateDatabase(wrapper)
+		if err != nil {
+			err = errors.Join(err, sqlDB.Close())
+			return nil, base.ErrorHelper.WrapIO(err, "failed to create custom database implementation")
+		}
+	} else {
+		impl = wrapper
+	}
+	wrapper.Derived = impl
+	return driverbase.NewDatabase(impl), nil
 }
 
 // Open creates a new ADBC Connection (session) by acquiring a *sql.Conn.
-func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
+func (d *DatabaseImplBase) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
 	return newConnection(ctx, d)
 }
 
 // Closes the database and its underlying connection pool.
-func (d *databaseImpl) Close(ctx context.Context) error {
+func (d *DatabaseImplBase) Close(ctx context.Context) error {
 	return d.db.Close()
 }
