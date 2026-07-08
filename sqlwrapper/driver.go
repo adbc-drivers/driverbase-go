@@ -49,11 +49,10 @@ type DBFactory interface {
 }
 
 // Driver provides an ADBC driver implementation that wraps database/sql drivers.
-// It uses a configurable TypeConverter for SQL-to-Arrow type mapping and conversion.
 type Driver struct {
 	driverbase.DriverImplBase
 	driverName        string
-	typeConverter     TypeConverter
+	vendorName        string
 	connectionFactory ConnectionFactory
 	stmtFactory       StatementFactory
 	dbFactory         DBFactory
@@ -61,11 +60,7 @@ type Driver struct {
 }
 
 // NewDriver creates a new sqlwrapper Driver with driver name, required DBFactory, and optional type converter.
-// If converter is nil, uses DefaultTypeConverter.
-func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory DBFactory, converter TypeConverter) *Driver {
-	if converter == nil {
-		converter = DefaultTypeConverter{VendorName: vendorName}
-	}
+func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory DBFactory) *Driver {
 	info := driverbase.DefaultDriverInfo(vendorName)
 	base := driverbase.NewDriverImplBase(info, alloc)
 	// Use vendorName for error messages (e.g., "MySQL") to match CGO layer capitalization,
@@ -73,7 +68,7 @@ func NewDriver(alloc memory.Allocator, driverName, vendorName string, dbFactory 
 	return &Driver{
 		DriverImplBase:    base,
 		driverName:        driverName,
-		typeConverter:     converter,
+		vendorName:        vendorName,
 		connectionFactory: nil, // No custom factory by default
 		stmtFactory:       nil,
 		dbFactory:         dbFactory,
@@ -106,9 +101,8 @@ type databaseImpl struct {
 	driverbase.DatabaseImplBase
 
 	// db is the Go SQL handle (connection pool)
-	db *sql.DB
-	// typeConverter handles SQL-to-Arrow type conversion
-	typeConverter TypeConverter
+	db         *sql.DB
+	vendorName string
 	// connectionFactory creates custom connection implementations if provided
 	connectionFactory ConnectionFactory
 	stmtFactory       StatementFactory
@@ -142,7 +136,7 @@ func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]str
 	db := &databaseImpl{
 		DatabaseImplBase:  base,
 		db:                sqlDB,
-		typeConverter:     d.typeConverter,
+		vendorName:        d.vendorName,
 		connectionFactory: d.connectionFactory,
 		stmtFactory:       d.stmtFactory,
 	}
