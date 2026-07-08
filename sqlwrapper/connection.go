@@ -38,9 +38,8 @@ type ConnectionImpl interface {
 // ConnectionImplBase implements the ADBC Connection interface on top of database/sql.
 type ConnectionImplBase struct {
 	driverbase.ConnectionImplBase
-	Derived ConnectionImpl
-
-	dbImpl *databaseImpl
+	Derived  ConnectionImpl
+	Database *DatabaseImplBase
 
 	// Conn is the dedicated SQL connection for this ADBC session
 	Conn *LoggingConn
@@ -51,7 +50,7 @@ type ConnectionImplBase struct {
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
-func newConnection(ctx context.Context, db *databaseImpl) (adbc.ConnectionWithContext, error) {
+func newConnection(ctx context.Context, db *DatabaseImplBase) (adbc.ConnectionWithContext, error) {
 	// Acquire a dedicated session
 	sqlConn, err := db.db.Conn(ctx)
 	if err != nil {
@@ -64,7 +63,7 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.ConnectionWithCo
 	// Create the base sqlwrapper connection first
 	sqlwrapperConn := &ConnectionImplBase{
 		ConnectionImplBase: base,
-		dbImpl:             db,
+		Database:           db,
 		Conn:               &LoggingConn{Conn: sqlConn, Logger: base.Logger},
 		Db:                 db.db,
 	}
