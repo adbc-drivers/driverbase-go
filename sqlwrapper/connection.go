@@ -44,8 +44,6 @@ type ConnectionImplBase struct {
 
 	// Conn is the dedicated SQL connection for this ADBC session
 	Conn *LoggingConn
-	// TypeConverter handles SQL-to-Arrow type conversion
-	TypeConverter TypeConverter
 	// db is the underlying database for metadata operations
 	Db *sql.DB
 
@@ -68,7 +66,6 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.ConnectionWithCo
 		ConnectionImplBase: base,
 		dbImpl:             db,
 		Conn:               &LoggingConn{Conn: sqlConn, Logger: base.Logger},
-		TypeConverter:      db.typeConverter,
 		Db:                 db.db,
 	}
 
@@ -116,11 +113,6 @@ func newConnection(ctx context.Context, db *databaseImpl) (adbc.ConnectionWithCo
 // NewStatement satisfies adbc.Connection
 func (c *ConnectionImplBase) NewStatement(ctx context.Context) (adbc.StatementWithContext, error) {
 	return newStatement(c)
-}
-
-// SetTypeConverter allows higher-level drivers to customize type conversion
-func (c *ConnectionImplBase) SetTypeConverter(converter TypeConverter) {
-	c.TypeConverter = converter
 }
 
 // SetOption sets a string option on this connection

@@ -57,17 +57,15 @@ type StatementImpl interface {
 
 	// Inject driver-specific params into Exec, as many drivers implement special functionality in this way
 	GetAdditionalExecParams() []any
+
+	MakeTypeConverter(vendorName string) TypeConverter
 }
 
 type StatementImplBase struct {
 	driverbase.StatementImplBase
 	Derived StatementImpl
 
-	// conn is the dedicated SQL connection
-	conn *LoggingConn
-	// connectionImpl is a reference to the parent connection for bulk ingest
-	connectionImpl ConnectionImpl
-	// query holds the SQL to execute
+	conn  *ConnectionImplBase
 	query string
 	// stmt holds the prepared statement, if Prepare() was called
 	stmt *LoggingStmt
@@ -75,13 +73,9 @@ type StatementImplBase struct {
 	boundStream array.RecordReader
 	// batchSize controls how many records to process at once during streaming execution
 	batchSize int64
-	// typeConverter handles SQL-to-Arrow type conversion
-	typeConverter TypeConverter
 
-	// bulk ingest
 	bulkIngestOptions driverbase.BulkIngestOptions
-	// closed tracks if the statement has been closed
-	closed bool
+	closed            bool
 }
 
 // Base returns the embedded StatementImplBase for driverbase plumbing
@@ -93,15 +87,21 @@ func (s *StatementImplBase) GetAdditionalExecParams() []any {
 	return nil
 }
 
+func (s *StatementImplBase) MakeTypeConverter(vendorName string) TypeConverter {
+	return &DefaultTypeConverter{VendorName: vendorName}
+}
+
+func (s *StatementImplBase) makeTypeConverter() TypeConverter {
+	return s.Derived.MakeTypeConverter(s.conn.dbImpl.vendorName)
+}
+
 // newStatement constructs a new StatementImpl wrapped by driverbase
 func newStatement(c *ConnectionImplBase) (adbc.StatementWithContext, error) {
 	base := driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper)
 	wrapper := &StatementImplBase{
 		StatementImplBase: base,
-		conn:              c.Conn,
-		connectionImpl:    c.Derived,
+		conn:              c,
 		batchSize:         1000, // Default batch size for streaming operations
-		typeConverter:     c.TypeConverter,
 		bulkIngestOptions: driverbase.NewBulkIngestOptions(),
 	}
 
@@ -121,7 +121,7 @@ func newStatement(c *ConnectionImplBase) (adbc.StatementWithContext, error) {
 
 // SetSqlQuery stores the SQL text on the statement
 func (s *StatementImplBase) SetSqlQuery(ctx context.Context, query string) error {
-	if err := s.connectionImpl.ClearPending(); err != nil {
+	if err := s.conn.Derived.ClearPending(); err != nil {
 		return err
 	}
 
@@ -208,7 +208,7 @@ func (s *StatementImplBase) BindStream(ctx context.Context, stream array.RecordR
 
 // ExecuteUpdate runs DML/DDL and returns rows affected
 func (s *StatementImplBase) ExecuteUpdate(ctx context.Context) (int64, error) {
-	if err := s.connectionImpl.ClearPending(); err != nil {
+	if err := s.conn.Derived.ClearPending(); err != nil {
 		return -1, err
 	}
 
@@ -238,7 +238,7 @@ func (s *StatementImplBase) ExecuteUpdate(ctx context.Context) (int64, error) {
 	if s.stmt != nil {
 		res, err = s.stmt.ExecContext(ctx, params...)
 	} else {
-		res, err = s.conn.ExecContext(ctx, s.query, params...)
+		res, err = s.conn.Conn.ExecContext(ctx, s.query, params...)
 	}
 	if err != nil {
 		return -1, s.Base().ErrorHelper.WrapIO(err, "failed to execute statement")
@@ -256,7 +256,7 @@ func (s *StatementImplBase) ExecuteSchema(ctx context.Context) (schema *arrow.Sc
 		return nil, s.Base().ErrorHelper.InvalidState("no query set")
 	}
 
-	if err := s.connectionImpl.ClearPending(); err != nil {
+	if err := s.conn.Derived.ClearPending(); err != nil {
 		return nil, err
 	}
 
@@ -266,7 +266,7 @@ func (s *StatementImplBase) ExecuteSchema(ctx context.Context) (schema *arrow.Sc
 	var rows *LoggingRows
 
 	// Can't use prepared statement with modified query, fall back to direct execution
-	rows, err = s.conn.QueryContext(ctx, limitQuery)
+	rows, err = s.conn.Conn.QueryContext(ctx, limitQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +281,7 @@ func (s *StatementImplBase) ExecuteSchema(ctx context.Context) (schema *arrow.Sc
 	}
 
 	// Convert SQL column types to Arrow schema
-	return buildArrowSchemaFromColumnTypes(columnTypes, s.typeConverter)
+	return buildArrowSchemaFromColumnTypes(columnTypes, s.makeTypeConverter())
 }
 
 type closer struct {
@@ -306,16 +306,16 @@ func (s *StatementImplBase) ExecuteQuery(ctx context.Context) (reader array.Reco
 		return nil, -1, s.Base().ErrorHelper.InvalidState("no query set")
 	}
 
-	if err := s.connectionImpl.ClearPending(); err != nil {
+	if err := s.conn.Derived.ClearPending(); err != nil {
 		return nil, -1, err
 	}
 
 	// Create the record reader implementation with all the state
 	impl := &sqlRecordReaderImpl{
-		conn:             s.conn,
+		conn:             s.conn.Conn,
 		query:            s.query,
 		stmt:             s.stmt,
-		typeConverter:    s.typeConverter,
+		typeConverter:    s.makeTypeConverter(),
 		additionalParams: s.Derived.GetAdditionalExecParams(),
 	}
 
@@ -330,7 +330,7 @@ func (s *StatementImplBase) ExecuteQuery(ctx context.Context) (reader array.Reco
 	options := driverbase.BaseRecordReaderOptions{
 		BatchRowLimit: s.batchSize,
 	}
-	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.connectionImpl.Base().Logger, s.boundStream,
+	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.conn.Derived.Base().Logger, s.boundStream,
 		options, impl); err != nil {
 		// Clear boundStream on error to prevent double-release in Close()
 		s.boundStream = nil
@@ -338,7 +338,7 @@ func (s *StatementImplBase) ExecuteQuery(ctx context.Context) (reader array.Reco
 	}
 	s.boundStream = nil
 
-	if err := s.connectionImpl.OfferPending(closer{baseRecordReader: baseRecordReader}); err != nil {
+	if err := s.conn.Derived.OfferPending(closer{baseRecordReader: baseRecordReader}); err != nil {
 		return nil, -1, err
 	}
 
@@ -374,7 +374,7 @@ func (s *StatementImplBase) Prepare(ctx context.Context) (err error) {
 		return s.Base().ErrorHelper.InvalidArgument("no query to prepare")
 	}
 
-	if err := s.connectionImpl.ClearPending(); err != nil {
+	if err := s.conn.Derived.ClearPending(); err != nil {
 		return err
 	}
 
@@ -386,7 +386,7 @@ func (s *StatementImplBase) Prepare(ctx context.Context) (err error) {
 		s.stmt = nil
 	}
 
-	s.stmt, err = s.conn.PrepareContext(ctx, s.query)
+	s.stmt, err = s.conn.Conn.PrepareContext(ctx, s.query)
 	if err != nil {
 		return s.Base().ErrorHelper.WrapIO(err, "failed to prepare statement")
 	}
@@ -418,7 +418,7 @@ func (s *StatementImplBase) executeBulkUpdate(ctx context.Context) (totalAffecte
 	if s.stmt != nil {
 		stmt = s.stmt
 	} else {
-		stmt, err = s.conn.PrepareContext(ctx, s.query)
+		stmt, err = s.conn.Conn.PrepareContext(ctx, s.query)
 		if err != nil {
 			return -1, s.Base().ErrorHelper.WrapIO(err, "failed to prepare statement for batch execution")
 		}
@@ -432,13 +432,14 @@ func (s *StatementImplBase) executeBulkUpdate(ctx context.Context) (totalAffecte
 	if len(additionalParams) > 0 {
 		params = append(params, additionalParams...)
 	}
+	typeConverter := s.makeTypeConverter()
 	for s.boundStream.Next() {
 		record := s.boundStream.RecordBatch()
 		for rowIdx := range int(record.NumRows()) {
 			for colIdx := range int(record.NumCols()) {
 				arr := record.Column(colIdx)
 				field := record.Schema().Field(colIdx)
-				value, err := s.typeConverter.ConvertArrowToGo(arr, rowIdx, &field)
+				value, err := typeConverter.ConvertArrowToGo(arr, rowIdx, &field)
 				if err != nil {
 					return totalAffected, s.Base().ErrorHelper.WrapIO(err, "failed to extract parameter value")
 				}
@@ -474,13 +475,13 @@ func (s *StatementImplBase) executeBulkIngest(ctx context.Context) (int64, error
 	}
 
 	// Type-assert to the BulkIngester interface for database-specific implementations
-	if ingester, ok := s.connectionImpl.(BulkIngester); ok {
+	if ingester, ok := s.conn.Derived.(BulkIngester); ok {
 		defer func() {
 			s.boundStream.Release()
 			s.boundStream = nil
 		}()
 
-		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.Derived, s.conn, &s.bulkIngestOptions, s.boundStream)
+		rowCount, err := ingester.ExecuteBulkIngest(ctx, s.Derived, s.conn.Conn, &s.bulkIngestOptions, s.boundStream)
 		if err != nil {
 			return -1, err
 		}
