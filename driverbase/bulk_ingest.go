@@ -93,10 +93,13 @@ func NewBulkIngestOptions() BulkIngestOptions {
 		MaxPendingBuffers:   2,
 		UploaderParallelism: 2,
 		WriterProps: WriterProps{
-			MaxBytes:           64 * 1024 * 1024, // 64MiB
-			ParquetWriterProps: parquet.NewWriterProperties(parquet.WithCompression(compress.Codecs.Snappy)),
-			ArrowWriterProps:   pqarrow.NewArrowWriterProperties(),
-			ArrowIpcProps:      []ipc.Option{ipc.WithZstd()},
+			MaxBytes: 64 * 1024 * 1024, // 64MiB
+			ParquetWriterProps: parquet.NewWriterProperties(
+				parquet.WithCompression(compress.Codecs.Snappy),
+				parquet.WithStats(false),
+			),
+			ArrowWriterProps: pqarrow.NewArrowWriterProperties(),
+			ArrowIpcProps:    []ipc.Option{ipc.WithZstd()},
 		},
 	}
 }
