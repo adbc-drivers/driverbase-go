@@ -17,6 +17,10 @@ repos:
   rev: 2ccb47ff45ad361a21071a7eedda4c37e6ae8c5a  # frozen: v2.4.2
   hooks:
   - id: codespell
+    exclude: >
+        (?x)^(
+            .*go\.sum
+        )$
 
 - repo: https://github.com/golangci/golangci-lint
   rev: c0d3ddc9cf3faa61a4e378e879ece580256d76e5  # frozen: v2.12.2
