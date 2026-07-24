@@ -29,15 +29,27 @@ import (
 
 type LoggingConn struct {
 	Conn   *sql.Conn
+	Tx     *sql.Tx
 	Logger *slog.Logger
 }
 
 func (tc *LoggingConn) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if tc.Tx != nil {
+		return tc.Tx.ExecContext(ctx, query, args...)
+	}
 	return tc.Conn.ExecContext(ctx, query, args...)
 }
 
 func (tc *LoggingConn) QueryContext(ctx context.Context, query string, args ...any) (*LoggingRows, error) {
-	rows, err := tc.Conn.QueryContext(ctx, query, args...)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if tc.Tx != nil {
+		rows, err = tc.Tx.QueryContext(ctx, query, args...)
+	} else {
+		rows, err = tc.Conn.QueryContext(ctx, query, args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +57,9 @@ func (tc *LoggingConn) QueryContext(ctx context.Context, query string, args ...a
 }
 
 func (tc *LoggingConn) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if tc.Tx != nil {
+		return tc.Tx.QueryRowContext(ctx, query, args...)
+	}
 	return tc.Conn.QueryRowContext(ctx, query, args...)
 }
 
@@ -53,7 +68,15 @@ func (tc *LoggingConn) PingContext(ctx context.Context) error {
 }
 
 func (tc *LoggingConn) PrepareContext(ctx context.Context, query string) (*LoggingStmt, error) {
-	stmt, err := tc.Conn.PrepareContext(ctx, query)
+	var (
+		stmt *sql.Stmt
+		err  error
+	)
+	if tc.Tx != nil {
+		stmt, err = tc.Tx.PrepareContext(ctx, query)
+	} else {
+		stmt, err = tc.Conn.PrepareContext(ctx, query)
+	}
 	if err != nil {
 		return nil, err
 	}
