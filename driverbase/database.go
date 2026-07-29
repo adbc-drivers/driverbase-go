@@ -98,7 +98,6 @@ type Database interface {
 	adbc.DatabaseWithContext
 	adbc.GetSetOptionsWithContext
 	adbc.DatabaseLogging
-	adbc.OTelTracingInit
 }
 
 // DatabaseImplBase is a struct that provides default implementations of the
