@@ -84,9 +84,11 @@ type tmplData struct {
 	Driver        string
 	DriverImport  string
 	DriverPackage string
+	// MySQL, mysql, MYSQL, Mysql
 	Prefix        string
 	PrefixLower   string
 	PrefixUpper   string
+	PrefixNoCamel string
 }
 
 var fileList = []string{
@@ -141,6 +143,7 @@ func main() {
 		Prefix:        *prefix,
 		PrefixLower:   strings.ToLower(*prefix),
 		PrefixUpper:   strings.ToUpper(*prefix),
+		PrefixNoCamel: (*prefix)[0:1] + strings.ToLower((*prefix)[1:]),
 	}, specs)
 }
 
