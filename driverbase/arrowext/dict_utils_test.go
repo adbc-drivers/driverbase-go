@@ -15,6 +15,7 @@
 package arrowext_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
@@ -25,6 +26,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type failingRecordReader struct {
+	schema   *arrow.Schema
+	err      error
+	refCount int
+}
+
+func (r *failingRecordReader) Retain()                        { r.refCount++ }
+func (r *failingRecordReader) Release()                       { r.refCount-- }
+func (r *failingRecordReader) Schema() *arrow.Schema          { return r.schema }
+func (r *failingRecordReader) Next() bool                     { return false }
+func (r *failingRecordReader) Record() arrow.RecordBatch      { return nil }
+func (r *failingRecordReader) RecordBatch() arrow.RecordBatch { return nil }
+func (r *failingRecordReader) Err() error                     { return r.err }
 
 func TestDictDecodeSchema(t *testing.T) {
 	var schema *arrow.Schema
@@ -91,4 +106,30 @@ func TestDictDecodeRecordReader(t *testing.T) {
 
 	assert.False(t, decoded.Next())
 	require.NoError(t, decoded.Err())
+}
+
+func TestDictDecodeRecordReaderPropagatesError(t *testing.T) {
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+
+	expected := errors.New("reader failed")
+	reader := &failingRecordReader{
+		schema: arrow.NewSchema([]arrow.Field{{
+			Name: "value",
+			Type: &arrow.DictionaryType{
+				IndexType: arrow.PrimitiveTypes.Int32,
+				ValueType: arrow.BinaryTypes.String,
+			},
+		}}, nil),
+		err:      expected,
+		refCount: 1,
+	}
+
+	decoded := arrowext.DictDecodeRecordReader(mem, &driverbase.ErrorHelper{DriverName: "test"}, reader)
+	reader.Release()
+	defer decoded.Release()
+
+	assert.False(t, decoded.Next())
+	require.ErrorIs(t, decoded.Err(), expected)
+	assert.Equal(t, 0, reader.refCount)
 }
