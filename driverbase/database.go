@@ -25,6 +25,7 @@ package driverbase
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -114,11 +115,23 @@ type DatabaseImplBase struct {
 	traceParent        string
 }
 
-// NewDatabaseImplBase instantiates DatabaseImplBase.
+type TracingOptions struct {
+	// ExporterName overrides the OTEL_TRACES_EXPORTER environment
+	// variable. Must be one of "none", "otlp", "console", or "adbcfile".
+	ExporterName string
+
+	// TracingFolderPath overrides the default on-disk folder used by
+	// the "adbcfile" exporter. Ignored for other exporters.
+	TracingFolderPath string
+}
+
+// NewDatabaseImplBase instantiates DatabaseImplBase and initializes its
+// OpenTelemetry tracer using the supplied TracingOptions. Empty fields
+// fall back to the defaults documented on TracingOptions.
 //
 //   - driver is a DriverImplBase containing the common resources from the parent
 //     driver, allowing the Arrow allocator and error handler to be reused.
-func NewDatabaseImplBase(ctx context.Context, driver *DriverImplBase) (DatabaseImplBase, error) {
+func NewDatabaseImplBase(ctx context.Context, driver *DriverImplBase, opts TracingOptions) (DatabaseImplBase, error) {
 	database := DatabaseImplBase{
 		Alloc:       driver.Alloc,
 		ErrorHelper: driver.ErrorHelper,
@@ -126,7 +139,12 @@ func NewDatabaseImplBase(ctx context.Context, driver *DriverImplBase) (DatabaseI
 		Logger:      driver.Logger,
 		Tracer:      nilTracer(),
 	}
-	err := database.InitTracing(ctx, driver.DriverInfo.GetName(), getDriverVersion(driver.DriverInfo))
+	err := database.InitTracing(
+		ctx,
+		driver.DriverInfo.GetName(),
+		getDriverVersion(driver.DriverInfo),
+		opts,
+	)
 	return database, err
 }
 
@@ -234,14 +252,22 @@ func (db *database) SetLogger(logger *slog.Logger) {
 	}
 }
 
-func (base *database) InitTracing(ctx context.Context, driverName string, driverVersion string) error {
-	return base.Base().InitTracing(ctx, driverName, driverVersion)
-}
-
-func (base *DatabaseImplBase) InitTracing(ctx context.Context, driverName string, driverVersion string) (err error) {
+// InitTracing initializes the database's OpenTelemetry tracer using the
+// supplied TracingOptions. Empty fields fall back to the defaults
+// documented on TracingOptions.
+func (base *DatabaseImplBase) InitTracing(
+	ctx context.Context,
+	driverName string,
+	driverVersion string,
+	opts TracingOptions,
+) (err error) {
 	fullyQualifiedDriverName := driverNamespace + "." + driverName
 
-	exporterName := getExporterName()
+	// opts.ExporterName takes precedence over OTEL_TRACES_EXPORTER.
+	exporterName := opts.ExporterName
+	if exporterName == "" {
+		exporterName = getExporterName()
+	}
 
 	// Empty exporter
 	if exporterName == "" {
@@ -259,6 +285,7 @@ func (base *DatabaseImplBase) InitTracing(ctx context.Context, driverName string
 		exporterName,
 		base,
 		driverName,
+		opts,
 	)
 	if err != nil {
 		return
@@ -286,6 +313,7 @@ func getExporters(
 	exporterName string,
 	base *DatabaseImplBase,
 	driverName string,
+	opts TracingOptions,
 ) (exporters []sdktrace.SpanExporter, exporterType traceExporterType, err error) {
 	var exporter sdktrace.SpanExporter
 	exporterType, ok := tryParseTraceExporterType(exporterName)
@@ -313,7 +341,7 @@ func getExporters(
 			return
 		}
 	case TraceExporterAdbcFile:
-		exporter, err = newAdbcFileExporter(driverName)
+		exporter, err = newAdbcFileExporter(driverName, opts.TracingFolderPath)
 		if err != nil {
 			return
 		}
@@ -403,13 +431,39 @@ func newOtlpTraceExporters(ctx context.Context) ([]sdktrace.SpanExporter, error)
 	return []sdktrace.SpanExporter{grpcExporter, httpExporter}, nil
 }
 
-func newAdbcFileExporter(driverName string) (*stdouttrace.Exporter, error) {
+type closableSpanExporter struct {
+	exporter sdktrace.SpanExporter
+	closer   io.Closer
+}
+
+func (e *closableSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	return e.exporter.ExportSpans(ctx, spans)
+}
+
+func (e *closableSpanExporter) Shutdown(ctx context.Context) error {
+	err := e.exporter.Shutdown(ctx)
+	if e.closer != nil {
+		err = errors.Join(err, e.closer.Close())
+	}
+	return err
+}
+
+func newAdbcFileExporter(driverName, folderPath string) (sdktrace.SpanExporter, error) {
 	fullyQualifiedDriverName := strings.ToLower(driverNamespace + "." + driverName)
-	fileWriter, err := NewRotatingFileWriter(WithLogNamePrefix(fullyQualifiedDriverName))
+	writerOpts := []rotatingFileWriterOption{WithLogNamePrefix(fullyQualifiedDriverName)}
+	if strings.TrimSpace(folderPath) != "" {
+		writerOpts = append(writerOpts, WithTracingFolderPath(folderPath))
+	}
+	fileWriter, err := NewRotatingFileWriter(writerOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return stdouttrace.New(stdouttrace.WithWriter(fileWriter))
+	exporter, err := stdouttrace.New(stdouttrace.WithWriter(fileWriter))
+	if err != nil {
+		_ = fileWriter.Close()
+		return nil, err
+	}
+	return &closableSpanExporter{exporter: exporter, closer: fileWriter}, nil
 }
 
 func newTracerProvider(exporters ...sdktrace.SpanExporter) (*sdktrace.TracerProvider, error) {

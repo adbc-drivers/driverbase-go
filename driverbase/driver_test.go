@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -54,6 +55,37 @@ func NewDriver(alloc memory.Allocator, handler slog.Handler, useHelpers bool) dr
 	info := driverbase.DefaultDriverInfo("MockDriver")
 	_ = info.RegisterInfoCode(adbc.InfoCode(10_001), "my custom info")
 	return driverbase.NewDriver(&driverImpl{DriverImplBase: driverbase.NewDriverImplBase(info, alloc), handler: handler, useHelpers: useHelpers})
+}
+
+func TestDatabaseTracingOptions(t *testing.T) {
+	ctx := context.Background()
+	driverBase := driverbase.NewDriverImplBase(
+		driverbase.DefaultDriverInfo("MockDriver"),
+		memory.DefaultAllocator,
+	)
+
+	_, err := driverbase.NewDatabaseImplBase(ctx, &driverBase, driverbase.TracingOptions{
+		ExporterName: "invalid",
+	})
+	require.Error(t, err)
+	var adbcErr adbc.Error
+	require.ErrorAs(t, err, &adbcErr)
+	require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+
+	traceDir := t.TempDir()
+	databaseBase, err := driverbase.NewDatabaseImplBase(ctx, &driverBase, driverbase.TracingOptions{
+		ExporterName:      string(adbc.TelemetryExporterAdbcFile),
+		TracingFolderPath: traceDir,
+	})
+	require.NoError(t, err)
+
+	_, span := databaseBase.StartSpan(ctx, "TestDatabaseTracingOptions")
+	span.End()
+	require.NoError(t, databaseBase.Close(ctx))
+
+	traceFiles, err := filepath.Glob(filepath.Join(traceDir, "*.jsonl"))
+	require.NoError(t, err)
+	require.Len(t, traceFiles, 1)
 }
 
 func TestDefaultDriver(t *testing.T) {
@@ -454,7 +486,7 @@ type driverImpl struct {
 }
 
 func (drv *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.DatabaseWithContext, error) {
-	dbBase, err := driverbase.NewDatabaseImplBase(ctx, &drv.DriverImplBase)
+	dbBase, err := driverbase.NewDatabaseImplBase(ctx, &drv.DriverImplBase, driverbase.TracingOptions{})
 	if err != nil {
 		return nil, err
 	}
