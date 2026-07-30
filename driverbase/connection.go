@@ -164,7 +164,7 @@ func (base *ConnectionImplBase) Rollback(context.Context) error {
 
 func (base *ConnectionImplBase) GetInfo(ctx context.Context, infoCodes []adbc.InfoCode) (reader array.RecordReader, err error) {
 	_, span := StartSpan(ctx, "ConnectionImplBase.GetInfo", base)
-	defer EndSpan(span, err)
+	defer EndSpanWithError(span, &err)
 
 	if len(infoCodes) == 0 {
 		infoCodes = base.DriverInfo.InfoSupportedCodes()

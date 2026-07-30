@@ -127,7 +127,7 @@ type DatabaseImplBase struct {
 // NewDatabaseWithContext is the main entrypoint for driver‐agnostic ADBC database creation.
 // It uses the driver name provided to NewDriver and expects opts[adbc.OptionKeyURI] to be the DSN/URI.
 func (d *Driver) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.DatabaseWithContext, error) {
-	base, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase)
+	base, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase, driverbase.TracingOptions{})
 	if err != nil {
 		return nil, d.ErrorHelper.WrapIO(err, "failed to initialize database base")
 	}
