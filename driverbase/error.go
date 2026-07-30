@@ -131,6 +131,7 @@ func (helper *ErrorHelper) wrapError(err error, defaultStatus adbc.Status, forma
 		}
 	}
 
+	// TODO: this should be consistent and prefix with "failed to" automatically
 	inspectedErr.Msg = fmt.Sprintf("[%s] %s: %s", helper.DriverName, contextMsg, inspectedErr.Msg)
 
 	return errors.Join(inspectedErr, err)

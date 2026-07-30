@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package arrowext provides helper utilities for arrow-go.
 package arrowext
 
 import (
@@ -33,6 +34,7 @@ func (EmptyReader) Err() error                     { return nil }
 
 var _ array.RecordReader = &EmptyReader{}
 
+// GetExtensionName extracts the extension name from a field, if present, or returns empty string.
 func GetExtensionName(field *arrow.Field) string {
 	extName, ok := field.Metadata.GetValue("ARROW:extension:name")
 	if !ok {
