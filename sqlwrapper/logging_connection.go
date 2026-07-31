@@ -74,9 +74,8 @@ func (tc *LoggingConn) PrepareContext(ctx context.Context, query string) (*Loggi
 		return nil, err
 	}
 	return &LoggingStmt{
-		Stmt:   stmt,
-		conn:   tc,
-		Logger: tc.Logger,
+		Stmt: stmt,
+		conn: tc,
 	}, nil
 }
 
@@ -119,19 +118,11 @@ func (lr *LoggingRows) Scan(dest ...any) error {
 
 type LoggingStmt struct {
 	Stmt   *sql.Stmt
-	txStmt *sql.Stmt    // cached tx-scoped wrapper, lazily created via tx.StmtContext
-	txRef  *sql.Tx      // which *sql.Tx txStmt is associated with (nil == no wrapper)
-	conn   *LoggingConn // back-ref to check the current tx at execute time
-	Logger *slog.Logger
+	txStmt *sql.Stmt
+	txRef  *sql.Tx
+	conn   *LoggingConn
 }
 
-// getTxStmt returns the *sql.Stmt to use for execution. When a transaction is
-// active, the conn-scoped Stmt is wrapped via tx.StmtContext so execution
-// participates in the transaction. The wrapper is cached across calls within
-// the same transaction and invalidated (closed + recreated) when the
-// transaction changes (Commit/Rollback/Isolation swap via chained-tx
-// semantics). When no transaction is active, the conn-scoped Stmt is used
-// directly.
 func (ls *LoggingStmt) getTxStmt(ctx context.Context) (*sql.Stmt, error) {
 	if ls.conn == nil || ls.conn.Tx == nil {
 		return ls.Stmt, nil
@@ -167,7 +158,7 @@ func (ls *LoggingStmt) QueryContext(ctx context.Context, args ...any) (*LoggingR
 	if err != nil {
 		return nil, err
 	}
-	return &LoggingRows{Rows: rows, Logger: ls.Logger}, err
+	return &LoggingRows{Rows: rows, Logger: ls.conn.Logger}, err
 }
 
 func (ls *LoggingStmt) Close() error {

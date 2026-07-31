@@ -103,9 +103,8 @@ func (tc *LoggingConn) PrepareContext(ctx context.Context, query string) (*Loggi
 		return nil, err
 	}
 	return &LoggingStmt{
-		Stmt:   stmt,
-		conn:   tc,
-		Logger: tc.Logger,
+		Stmt: stmt,
+		conn: tc,
 	}, nil
 }
 
@@ -202,35 +201,27 @@ func (lr *LoggingRows) Scan(dest ...any) error {
 
 type LoggingStmt struct {
 	Stmt   *sql.Stmt
-	txStmt *sql.Stmt    // cached tx-scoped wrapper, lazily created via tx.StmtContext
-	txRef  *sql.Tx      // which *sql.Tx txStmt is associated with (nil == no wrapper)
-	conn   *LoggingConn // back-ref to check the current tx at execute time
-	Logger *slog.Logger
+	txStmt *sql.Stmt
+	txRef  *sql.Tx
+	conn   *LoggingConn
 }
 
-// getTxStmt returns the *sql.Stmt to use for execution. When a transaction is
-// active, the conn-scoped Stmt is wrapped via tx.StmtContext so execution
-// participates in the transaction. The wrapper is cached across calls within
-// the same transaction and invalidated (closed + recreated) when the
-// transaction changes (Commit/Rollback/Isolation swap via chained-tx
-// semantics). When no transaction is active, the conn-scoped Stmt is used
-// directly.
 func (ls *LoggingStmt) getTxStmt(ctx context.Context) (*sql.Stmt, error) {
 	if ls.conn == nil || ls.conn.Tx == nil {
-		ls.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: no active tx, using conn-scoped stmt")
+		ls.conn.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: no active tx, using conn-scoped stmt")
 		return ls.Stmt, nil
 	}
 	if ls.txRef == ls.conn.Tx && ls.txStmt != nil {
-		ls.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: cache hit (same tx)")
+		ls.conn.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: cache hit (same tx)")
 		return ls.txStmt, nil
 	}
 	if ls.txStmt != nil {
-		ls.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: cache miss (tx changed), closing old wrapper")
+		ls.conn.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: cache miss (tx changed), closing old wrapper")
 		_ = ls.txStmt.Close()
 		ls.txStmt = nil
 		ls.txRef = nil
 	}
-	ls.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: creating tx.StmtContext wrapper")
+	ls.conn.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: creating tx.StmtContext wrapper")
 	txStmt := ls.conn.Tx.StmtContext(ctx, ls.Stmt)
 	ls.txStmt = txStmt
 	ls.txRef = ls.conn.Tx
@@ -246,7 +237,7 @@ func (ls *LoggingStmt) ExecContext(ctx context.Context, args ...any) (sql.Result
 		return nil, err
 	}
 	rs, err := stmt.ExecContext(ctx, args...)
-	ls.Logger.DebugContext(ctx, "LoggingStmt.ExecContext", slog.Any("args", args), slog.Any("err", err))
+	ls.conn.Logger.DebugContext(ctx, "LoggingStmt.ExecContext", slog.Any("args", args), slog.Any("err", err))
 	return rs, err
 }
 
@@ -259,21 +250,21 @@ func (ls *LoggingStmt) QueryContext(ctx context.Context, args ...any) (*LoggingR
 		return nil, err
 	}
 	rows, err := stmt.QueryContext(ctx, args...)
-	ls.Logger.DebugContext(ctx, "LoggingStmt.QueryContext", slog.Any("args", args), slog.Any("err", err))
-	return &LoggingRows{Rows: rows, Logger: ls.Logger}, err
+	ls.conn.Logger.DebugContext(ctx, "LoggingStmt.QueryContext", slog.Any("args", args), slog.Any("err", err))
+	return &LoggingRows{Rows: rows, Logger: ls.conn.Logger}, err
 }
 
 func (ls *LoggingStmt) Close() error {
 	var err error
 	if ls.txStmt != nil {
 		err = errors.Join(err, ls.txStmt.Close())
-		ls.Logger.Debug("LoggingStmt.Close txStmt", slog.Any("err", err))
+		ls.conn.Logger.Debug("LoggingStmt.Close txStmt", slog.Any("err", err))
 		ls.txStmt = nil
 		ls.txRef = nil
 	}
 	if ls.Stmt != nil {
 		err = errors.Join(err, ls.Stmt.Close())
-		ls.Logger.Debug("LoggingStmt.Close", slog.Any("err", err))
+		ls.conn.Logger.Debug("LoggingStmt.Close", slog.Any("err", err))
 		ls.Stmt = nil
 	}
 	return err
