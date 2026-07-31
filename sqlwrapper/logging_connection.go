@@ -24,6 +24,7 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 )
 
@@ -68,20 +69,13 @@ func (tc *LoggingConn) PingContext(ctx context.Context) error {
 }
 
 func (tc *LoggingConn) PrepareContext(ctx context.Context, query string) (*LoggingStmt, error) {
-	var (
-		stmt *sql.Stmt
-		err  error
-	)
-	if tc.Tx != nil {
-		stmt, err = tc.Tx.PrepareContext(ctx, query)
-	} else {
-		stmt, err = tc.Conn.PrepareContext(ctx, query)
-	}
+	stmt, err := tc.Conn.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 	return &LoggingStmt{
 		Stmt:   stmt,
+		conn:   tc,
 		Logger: tc.Logger,
 	}, nil
 }
@@ -125,15 +119,51 @@ func (lr *LoggingRows) Scan(dest ...any) error {
 
 type LoggingStmt struct {
 	Stmt   *sql.Stmt
+	txStmt *sql.Stmt    // cached tx-scoped wrapper, lazily created via tx.StmtContext
+	txRef  *sql.Tx      // which *sql.Tx txStmt is associated with (nil == no wrapper)
+	conn   *LoggingConn // back-ref to check the current tx at execute time
 	Logger *slog.Logger
 }
 
+// getTxStmt returns the *sql.Stmt to use for execution. When a transaction is
+// active, the conn-scoped Stmt is wrapped via tx.StmtContext so execution
+// participates in the transaction. The wrapper is cached across calls within
+// the same transaction and invalidated (closed + recreated) when the
+// transaction changes (Commit/Rollback/Isolation swap via chained-tx
+// semantics). When no transaction is active, the conn-scoped Stmt is used
+// directly.
+func (ls *LoggingStmt) getTxStmt(ctx context.Context) (*sql.Stmt, error) {
+	if ls.conn == nil || ls.conn.Tx == nil {
+		return ls.Stmt, nil
+	}
+	if ls.txRef == ls.conn.Tx && ls.txStmt != nil {
+		return ls.txStmt, nil
+	}
+	if ls.txStmt != nil {
+		_ = ls.txStmt.Close()
+		ls.txStmt = nil
+		ls.txRef = nil
+	}
+	txStmt := ls.conn.Tx.StmtContext(ctx, ls.Stmt)
+	ls.txStmt = txStmt
+	ls.txRef = ls.conn.Tx
+	return ls.txStmt, nil
+}
+
 func (ls *LoggingStmt) ExecContext(ctx context.Context, args ...any) (sql.Result, error) {
-	return ls.Stmt.ExecContext(ctx, args...)
+	stmt, err := ls.getTxStmt(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return stmt.ExecContext(ctx, args...)
 }
 
 func (ls *LoggingStmt) QueryContext(ctx context.Context, args ...any) (*LoggingRows, error) {
-	rows, err := ls.Stmt.QueryContext(ctx, args...)
+	stmt, err := ls.getTxStmt(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := stmt.QueryContext(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -141,5 +171,14 @@ func (ls *LoggingStmt) QueryContext(ctx context.Context, args ...any) (*LoggingR
 }
 
 func (ls *LoggingStmt) Close() error {
-	return ls.Stmt.Close()
+	var err error
+	if ls.txStmt != nil {
+		err = errors.Join(err, ls.txStmt.Close())
+		ls.txStmt = nil
+		ls.txRef = nil
+	}
+	if ls.Stmt != nil {
+		err = errors.Join(err, ls.Stmt.Close())
+	}
+	return err
 }
