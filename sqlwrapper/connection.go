@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
@@ -46,7 +47,89 @@ type ConnectionImplBase struct {
 	// db is the underlying database for metadata operations
 	Db *sql.DB
 
+	// tx is the active transaction, or nil when autocommit is on.
+	tx *sql.Tx
+	// txCancel releases the deadline goroutine from beginNewTx; nil if no deadline.
+	txCancel context.CancelFunc
+	// isolationLevel is the last-set ADBC isolation level, applied at BeginTx.
+	isolationLevel adbc.OptionIsolationLevel
+
 	Pending io.Closer
+}
+
+// adbcToSqlIsolationLevel maps ADBC OptionIsolationLevel to sql.IsolationLevel.
+// All known levels are mapped; unknown strings return StatusInvalidArgument.
+// The underlying database/sql driver decides at BeginTx time what is supported.
+func adbcToSqlIsolationLevel(level adbc.OptionIsolationLevel) (sql.IsolationLevel, error) {
+	switch level {
+	case adbc.LevelDefault:
+		return sql.LevelDefault, nil
+	case adbc.LevelReadUncommitted:
+		return sql.LevelReadUncommitted, nil
+	case adbc.LevelReadCommitted:
+		return sql.LevelReadCommitted, nil
+	case adbc.LevelRepeatableRead:
+		return sql.LevelRepeatableRead, nil
+	case adbc.LevelSnapshot:
+		return sql.LevelSnapshot, nil
+	case adbc.LevelSerializable:
+		return sql.LevelSerializable, nil
+	case adbc.LevelLinearizable:
+		return sql.LevelLinearizable, nil
+	default:
+		return sql.LevelDefault, adbc.Error{
+			Code: adbc.StatusInvalidArgument,
+			Msg:  fmt.Sprintf("unknown isolation level %q", string(level)),
+		}
+	}
+}
+
+// beginNewTx starts a transaction on the dedicated connection with the cached
+// isolation level. The tx context is detached from the caller's cancellation
+// (so it survives across CGO driver-manager calls that cancel per-call contexts)
+// while preserving any deadline so caller timeouts still apply. The cancel
+// function for the deadline context is stored in c.txCancel; call releaseTx to
+// release it when the tx ends.
+func (c *ConnectionImplBase) beginNewTx(ctx context.Context) error {
+	opts := &sql.TxOptions{}
+	if c.isolationLevel != "" && c.isolationLevel != adbc.LevelDefault {
+		level, err := adbcToSqlIsolationLevel(c.isolationLevel)
+		if err != nil {
+			return err
+		}
+		opts.Isolation = level
+	}
+
+	txCtx := context.WithoutCancel(ctx)
+	c.txCancel = nil
+	if deadline, ok := ctx.Deadline(); ok {
+		txCtx, c.txCancel = context.WithDeadline(txCtx, deadline)
+	}
+
+	tx, err := c.Conn.Conn.BeginTx(txCtx, opts)
+	if err != nil {
+		if c.txCancel != nil {
+			c.txCancel()
+		}
+		return c.Base().ErrorHelper.WrapInternal(err, "BEGIN failed")
+	}
+	c.tx = tx
+	c.Conn.Tx = tx
+	return nil
+}
+
+// releaseTx clears the active transaction state and releases the deadline
+// context's cancel function. Must be called after the tx is committed or
+// rolled back, before any subsequent beginNewTx.
+func (c *ConnectionImplBase) releaseTx() {
+	if c.txCancel != nil {
+		c.txCancel()
+		c.txCancel = nil
+	}
+	c.tx = nil
+	if c.Conn != nil {
+		c.Conn.Tx = nil
+	}
 }
 
 // newConnection creates a new ADBC Connection by acquiring a *sql.Conn from the pool.
@@ -114,37 +197,99 @@ func (c *ConnectionImplBase) NewStatement(ctx context.Context) (adbc.StatementWi
 	return newStatement(c)
 }
 
-// SetOption sets a string option on this connection
+// SetOption sets a string option on this connection.
 func (c *ConnectionImplBase) SetOption(ctx context.Context, key, value string) error {
-	return c.ConnectionImplBase.SetOption(ctx, key, value)
+	switch key {
+	case adbc.OptionKeyIsolationLevel:
+		level := adbc.OptionIsolationLevel(value)
+		if _, err := adbcToSqlIsolationLevel(level); err != nil {
+			return err
+		}
+		c.isolationLevel = level
+		if c.tx != nil {
+			tx := c.tx
+			c.releaseTx()
+			if err := tx.Commit(); err != nil {
+				return c.Base().ErrorHelper.Errorf(adbc.StatusInternal, "COMMIT for isolation restart failed: %v", err)
+			}
+			return c.beginNewTx(ctx)
+		}
+		return nil
+	default:
+		return c.ConnectionImplBase.SetOption(ctx, key, value)
+	}
 }
 
+// GetOption returns the cached isolation level (LevelDefault if never set).
 func (c *ConnectionImplBase) GetOption(ctx context.Context, key string) (string, error) {
-	return c.ConnectionImplBase.GetOption(ctx, key)
+	switch key {
+	case adbc.OptionKeyIsolationLevel:
+		level := c.isolationLevel
+		if level == "" {
+			level = adbc.LevelDefault
+		}
+		return string(level), nil
+	default:
+		return c.ConnectionImplBase.GetOption(ctx, key)
+	}
 }
 
-// Commit is a no-op under auto-commit mode
-// TODO (https://github.com/adbc-drivers/driverbase-go/issues/28): we'll likely want to utilize https://pkg.go.dev/database/sql#Tx
-// to manage this here
+// SetAutocommit implements driverbase.AutocommitSetter. Disabling autocommit
+// begins a transaction; enabling it commits any in-flight tx.
+func (c *ConnectionImplBase) SetAutocommit(ctx context.Context, enabled bool) error {
+	if enabled {
+		if c.tx != nil {
+			tx := c.tx
+			c.releaseTx()
+			if err := tx.Commit(); err != nil {
+				return c.Base().ErrorHelper.Errorf(adbc.StatusInternal, "COMMIT failed: %v", err)
+			}
+		}
+		return nil
+	}
+	if c.tx == nil {
+		return c.beginNewTx(ctx)
+	}
+	return nil
+}
+
+// Commit commits the current transaction and begins a new one (chained-tx
+// semantics). The driverbase wrapper short-circuits with StatusInvalidState
+// when autocommit is enabled.
 func (c *ConnectionImplBase) Commit(ctx context.Context) error {
-	return c.Base().ErrorHelper.Errorf(
-		adbc.StatusNotImplemented,
-		"Commit not supported in auto-commit mode",
-	)
+	if c.tx == nil {
+		return c.Base().ErrorHelper.Errorf(adbc.StatusInvalidState, "no active transaction")
+	}
+	tx := c.tx
+	c.releaseTx()
+	if err := tx.Commit(); err != nil {
+		return c.Base().ErrorHelper.Errorf(adbc.StatusInternal, "COMMIT failed: %v", err)
+	}
+	return c.beginNewTx(ctx)
 }
 
-// Rollback is a no-op under auto-commit mode
-// TODO (https://github.com/adbc-drivers/driverbase-go/issues/28): we'll likely want to utilize https://pkg.go.dev/database/sql#Tx
-// to manage this here
+// Rollback rolls back the current transaction and begins a new one (chained-tx
+// semantics). The driverbase wrapper short-circuits with StatusInvalidState
+// when autocommit is enabled.
 func (c *ConnectionImplBase) Rollback(ctx context.Context) error {
-	return c.Base().ErrorHelper.Errorf(
-		adbc.StatusNotImplemented,
-		"Rollback not supported in auto-commit mode",
-	)
+	if c.tx == nil {
+		return c.Base().ErrorHelper.Errorf(adbc.StatusInvalidState, "no active transaction")
+	}
+	tx := c.tx
+	c.releaseTx()
+	if err := tx.Rollback(); err != nil {
+		return c.Base().ErrorHelper.Errorf(adbc.StatusInternal, "ROLLBACK failed: %v", err)
+	}
+	return c.beginNewTx(ctx)
 }
 
-// Close closes the underlying SQL connection
+// Close rolls back any active transaction, then closes the underlying connection.
 func (c *ConnectionImplBase) Close(ctx context.Context) error {
+	if c.tx != nil {
+		tx := c.tx
+		c.releaseTx()
+		_ = tx.Rollback()
+	}
 	if err := c.ClearPending(); err != nil {
 		return errors.Join(err, c.Conn.Close())
 	}

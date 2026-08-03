@@ -24,6 +24,7 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -31,10 +32,16 @@ import (
 
 type LoggingConn struct {
 	Conn   *sql.Conn
+	Tx     *sql.Tx
 	Logger *slog.Logger
 }
 
 func (tc *LoggingConn) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if tc.Tx != nil {
+		rs, err := tc.Tx.ExecContext(ctx, query, args...)
+		tc.Logger.DebugContext(ctx, "LoggingConn.Tx.ExecContext", slog.String("query", query), slog.Any("args", args), slog.Any("err", err))
+		return rs, err
+	}
 	if tc.Conn == nil {
 		return nil, adbc.Error{Code: adbc.StatusInvalidState, Msg: "LoggingConn.ExecContext: nil connection"}
 	}
@@ -44,11 +51,20 @@ func (tc *LoggingConn) ExecContext(ctx context.Context, query string, args ...an
 }
 
 func (tc *LoggingConn) QueryContext(ctx context.Context, query string, args ...any) (*LoggingRows, error) {
-	if tc.Conn == nil {
-		return nil, adbc.Error{Code: adbc.StatusInvalidState, Msg: "LoggingConn.QueryContext: nil connection"}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if tc.Tx != nil {
+		rows, err = tc.Tx.QueryContext(ctx, query, args...)
+		tc.Logger.DebugContext(ctx, "LoggingConn.Tx.QueryContext", slog.String("query", query), slog.Any("args", args), slog.Any("err", err))
+	} else {
+		if tc.Conn == nil {
+			return nil, adbc.Error{Code: adbc.StatusInvalidState, Msg: "LoggingConn.QueryContext: nil connection"}
+		}
+		rows, err = tc.Conn.QueryContext(ctx, query, args...)
+		tc.Logger.DebugContext(ctx, "LoggingConn.QueryContext", slog.String("query", query), slog.Any("args", args), slog.Any("err", err))
 	}
-	rows, err := tc.Conn.QueryContext(ctx, query, args...)
-	tc.Logger.DebugContext(ctx, "LoggingConn.QueryContext", slog.String("query", query), slog.Any("args", args), slog.Any("err", err))
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +72,10 @@ func (tc *LoggingConn) QueryContext(ctx context.Context, query string, args ...a
 }
 
 func (tc *LoggingConn) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if tc.Tx != nil {
+		tc.Logger.DebugContext(ctx, "LoggingConn.Tx.QueryRowContext", slog.String("query", query), slog.Any("args", args))
+		return tc.Tx.QueryRowContext(ctx, query, args...)
+	}
 	if tc.Conn == nil {
 		// We can't construct a sql.Row ourselves
 		panic("LoggingConn.QueryRowContext: nil connection")
@@ -83,8 +103,8 @@ func (tc *LoggingConn) PrepareContext(ctx context.Context, query string) (*Loggi
 		return nil, err
 	}
 	return &LoggingStmt{
-		Stmt:   stmt,
-		Logger: tc.Logger,
+		Stmt: stmt,
+		conn: tc,
 	}, nil
 }
 
@@ -181,15 +201,43 @@ func (lr *LoggingRows) Scan(dest ...any) error {
 
 type LoggingStmt struct {
 	Stmt   *sql.Stmt
-	Logger *slog.Logger
+	txStmt *sql.Stmt
+	txRef  *sql.Tx
+	conn   *LoggingConn
+}
+
+func (ls *LoggingStmt) getTxStmt(ctx context.Context) (*sql.Stmt, error) {
+	if ls.conn == nil || ls.conn.Tx == nil {
+		ls.conn.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: no active tx, using conn-scoped stmt")
+		return ls.Stmt, nil
+	}
+	if ls.txRef == ls.conn.Tx && ls.txStmt != nil {
+		ls.conn.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: cache hit (same tx)")
+		return ls.txStmt, nil
+	}
+	if ls.txStmt != nil {
+		ls.conn.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: cache miss (tx changed), closing old wrapper")
+		_ = ls.txStmt.Close()
+		ls.txStmt = nil
+		ls.txRef = nil
+	}
+	ls.conn.Logger.DebugContext(ctx, "LoggingStmt.getTxStmt: creating tx.StmtContext wrapper")
+	txStmt := ls.conn.Tx.StmtContext(ctx, ls.Stmt)
+	ls.txStmt = txStmt
+	ls.txRef = ls.conn.Tx
+	return ls.txStmt, nil
 }
 
 func (ls *LoggingStmt) ExecContext(ctx context.Context, args ...any) (sql.Result, error) {
 	if ls.Stmt == nil {
 		return nil, adbc.Error{Code: adbc.StatusInvalidState, Msg: "LoggingStmt.ExecContext: nil statement"}
 	}
-	rs, err := ls.Stmt.ExecContext(ctx, args...)
-	ls.Logger.DebugContext(ctx, "LoggingStmt.ExecContext", slog.Any("args", args), slog.Any("err", err))
+	stmt, err := ls.getTxStmt(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rs, err := stmt.ExecContext(ctx, args...)
+	ls.conn.Logger.DebugContext(ctx, "LoggingStmt.ExecContext", slog.Any("args", args), slog.Any("err", err))
 	return rs, err
 }
 
@@ -197,19 +245,27 @@ func (ls *LoggingStmt) QueryContext(ctx context.Context, args ...any) (*LoggingR
 	if ls.Stmt == nil {
 		return nil, adbc.Error{Code: adbc.StatusInvalidState, Msg: "LoggingStmt.QueryContext: nil statement"}
 	}
-	rows, err := ls.Stmt.QueryContext(ctx, args...)
-	ls.Logger.DebugContext(ctx, "LoggingStmt.QueryContext", slog.Any("args", args), slog.Any("err", err))
-	return &LoggingRows{Rows: rows, Logger: ls.Logger}, err
+	stmt, err := ls.getTxStmt(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := stmt.QueryContext(ctx, args...)
+	ls.conn.Logger.DebugContext(ctx, "LoggingStmt.QueryContext", slog.Any("args", args), slog.Any("err", err))
+	return &LoggingRows{Rows: rows, Logger: ls.conn.Logger}, err
 }
 
 func (ls *LoggingStmt) Close() error {
-	if ls.Stmt != nil {
-		defer func() {
-			ls.Stmt = nil
-		}()
-		err := ls.Stmt.Close()
-		ls.Logger.Debug("LoggingStmt.Close", slog.Any("err", err))
-		return err
+	var err error
+	if ls.txStmt != nil {
+		err = errors.Join(err, ls.txStmt.Close())
+		ls.conn.Logger.Debug("LoggingStmt.Close txStmt", slog.Any("err", err))
+		ls.txStmt = nil
+		ls.txRef = nil
 	}
-	return nil
+	if ls.Stmt != nil {
+		err = errors.Join(err, ls.Stmt.Close())
+		ls.conn.Logger.Debug("LoggingStmt.Close", slog.Any("err", err))
+		ls.Stmt = nil
+	}
+	return err
 }

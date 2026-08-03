@@ -24,20 +24,33 @@ package sqlwrapper
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 )
 
 type LoggingConn struct {
 	Conn   *sql.Conn
+	Tx     *sql.Tx
 	Logger *slog.Logger
 }
 
 func (tc *LoggingConn) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if tc.Tx != nil {
+		return tc.Tx.ExecContext(ctx, query, args...)
+	}
 	return tc.Conn.ExecContext(ctx, query, args...)
 }
 
 func (tc *LoggingConn) QueryContext(ctx context.Context, query string, args ...any) (*LoggingRows, error) {
-	rows, err := tc.Conn.QueryContext(ctx, query, args...)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if tc.Tx != nil {
+		rows, err = tc.Tx.QueryContext(ctx, query, args...)
+	} else {
+		rows, err = tc.Conn.QueryContext(ctx, query, args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +58,9 @@ func (tc *LoggingConn) QueryContext(ctx context.Context, query string, args ...a
 }
 
 func (tc *LoggingConn) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if tc.Tx != nil {
+		return tc.Tx.QueryRowContext(ctx, query, args...)
+	}
 	return tc.Conn.QueryRowContext(ctx, query, args...)
 }
 
@@ -58,8 +74,8 @@ func (tc *LoggingConn) PrepareContext(ctx context.Context, query string) (*Loggi
 		return nil, err
 	}
 	return &LoggingStmt{
-		Stmt:   stmt,
-		Logger: tc.Logger,
+		Stmt: stmt,
+		conn: tc,
 	}, nil
 }
 
@@ -102,21 +118,58 @@ func (lr *LoggingRows) Scan(dest ...any) error {
 
 type LoggingStmt struct {
 	Stmt   *sql.Stmt
-	Logger *slog.Logger
+	txStmt *sql.Stmt
+	txRef  *sql.Tx
+	conn   *LoggingConn
+}
+
+func (ls *LoggingStmt) getTxStmt(ctx context.Context) (*sql.Stmt, error) {
+	if ls.conn == nil || ls.conn.Tx == nil {
+		return ls.Stmt, nil
+	}
+	if ls.txRef == ls.conn.Tx && ls.txStmt != nil {
+		return ls.txStmt, nil
+	}
+	if ls.txStmt != nil {
+		_ = ls.txStmt.Close()
+		ls.txStmt = nil
+		ls.txRef = nil
+	}
+	txStmt := ls.conn.Tx.StmtContext(ctx, ls.Stmt)
+	ls.txStmt = txStmt
+	ls.txRef = ls.conn.Tx
+	return ls.txStmt, nil
 }
 
 func (ls *LoggingStmt) ExecContext(ctx context.Context, args ...any) (sql.Result, error) {
-	return ls.Stmt.ExecContext(ctx, args...)
-}
-
-func (ls *LoggingStmt) QueryContext(ctx context.Context, args ...any) (*LoggingRows, error) {
-	rows, err := ls.Stmt.QueryContext(ctx, args...)
+	stmt, err := ls.getTxStmt(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &LoggingRows{Rows: rows, Logger: ls.Logger}, err
+	return stmt.ExecContext(ctx, args...)
+}
+
+func (ls *LoggingStmt) QueryContext(ctx context.Context, args ...any) (*LoggingRows, error) {
+	stmt, err := ls.getTxStmt(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	return &LoggingRows{Rows: rows, Logger: ls.conn.Logger}, err
 }
 
 func (ls *LoggingStmt) Close() error {
-	return ls.Stmt.Close()
+	var err error
+	if ls.txStmt != nil {
+		err = errors.Join(err, ls.txStmt.Close())
+		ls.txStmt = nil
+		ls.txRef = nil
+	}
+	if ls.Stmt != nil {
+		err = errors.Join(err, ls.Stmt.Close())
+	}
+	return err
 }
