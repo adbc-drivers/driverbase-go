@@ -111,7 +111,7 @@ func (c *ConnectionImplBase) beginNewTx(ctx context.Context) error {
 		if c.txCancel != nil {
 			c.txCancel()
 		}
-		return c.Base().ErrorHelper.Errorf(adbc.StatusInternal, "BEGIN failed: %v", err)
+		return c.Base().ErrorHelper.WrapInternal(err, "BEGIN failed")
 	}
 	c.tx = tx
 	c.Conn.Tx = tx
@@ -197,8 +197,7 @@ func (c *ConnectionImplBase) NewStatement(ctx context.Context) (adbc.StatementWi
 	return newStatement(c)
 }
 
-// SetOption caches OptionKeyIsolationLevel for the next BeginTx. If a tx is
-// already active, commits it and begins a new one with the updated level.
+// SetOption sets a string option on this connection.
 func (c *ConnectionImplBase) SetOption(ctx context.Context, key, value string) error {
 	switch key {
 	case adbc.OptionKeyIsolationLevel:
