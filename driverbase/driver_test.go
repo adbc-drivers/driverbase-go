@@ -154,7 +154,7 @@ func TestDefaultDriver(t *testing.T) {
 		},
 		{
 			"info_name": 102,
-			"info_value": [0, "(unknown or development build)"]
+			"info_value": [0, "v18.7.0"]
 		},
 		{
 			"info_name": 103,
@@ -291,7 +291,7 @@ func TestCustomizedDriver(t *testing.T) {
 		},
 		{
 			"info_name": 102,
-			"info_value": [0, "(unknown or development build)"]
+			"info_value": [0, "v18.7.0"]
 		},
 		{
 			"info_name": 103,
