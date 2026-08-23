@@ -168,6 +168,7 @@ func (base *DatabaseImplBase) GetOptionInt(ctx context.Context, key string) (int
 	return 0, base.ErrorHelper.Errorf(adbc.StatusNotFound, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
 
+//nolint:staticcheck  // SA4023 triggers here
 func (base *DatabaseImplBase) SetOption(ctx context.Context, key string, val string) error {
 	return base.ErrorHelper.Errorf(adbc.StatusNotImplemented, "%s '%s'", DatabaseMessageOptionUnknown, key)
 }
@@ -204,6 +205,7 @@ func (base *DatabaseImplBase) Open(ctx context.Context) (adbc.ConnectionWithCont
 
 func (base *DatabaseImplBase) SetOptions(ctx context.Context, options map[string]string) error {
 	for key, val := range options {
+		//nolint:staticcheck  // SA4023 triggers here
 		if err := base.SetOption(ctx, key, val); err != nil {
 			return err
 		}

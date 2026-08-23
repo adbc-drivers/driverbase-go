@@ -23,7 +23,7 @@ repos:
         )$
 
 - repo: https://github.com/golangci/golangci-lint
-  rev: c0d3ddc9cf3faa61a4e378e879ece580256d76e5  # frozen: v2.12.2
+  rev: 9c5dd448ac26caa35e3faee1e8e94476ae885b0f  # frozen: v2.13.1
   hooks:
   - id: golangci-lint
     name: lint driverbase

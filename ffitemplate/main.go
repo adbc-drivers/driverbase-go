@@ -46,8 +46,7 @@ func formatSource(in []byte) ([]byte, error) {
 	cmd.Stdin = r
 	out, err := cmd.Output()
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			return nil, fmt.Errorf("error running goimports:%v\n%s\n%s", err, string(out), string(ee.Stderr))
 		}
 		return nil, fmt.Errorf("error running goimports:%v\n%s", err, string(out))
@@ -62,8 +61,7 @@ func formatCSource(in []byte) ([]byte, error) {
 	cmd.Stdin = r
 	out, err := cmd.Output()
 	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			return nil, fmt.Errorf("error running clang-format: %s", string(ee.Stderr))
 		}
 		return nil, fmt.Errorf("error running clang-format: %s", string(out))

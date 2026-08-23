@@ -113,8 +113,7 @@ func (helper *ErrorHelper) wrapError(err error, defaultStatus adbc.Status, forma
 		return nil
 	}
 
-	var adbcErr adbc.Error
-	if errors.As(err, &adbcErr) {
+	if _, ok := errors.AsType[adbc.Error](err); ok {
 		return err
 	}
 
