@@ -17,8 +17,8 @@ module github.com/adbc-drivers/driverbase-go/validation
 go 1.26.6
 
 require (
-	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20260817015335-4ff17728aee2
-	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-20260817015335-4ff17728aee2
+	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20260823235414-930d4850cf22
+	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-20260823235414-930d4850cf22
 	github.com/apache/arrow-adbc/go/adbc v1.12.0
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/stretchr/testify v1.12.1
