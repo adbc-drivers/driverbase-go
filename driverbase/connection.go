@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -163,8 +164,14 @@ func (base *ConnectionImplBase) Rollback(context.Context) error {
 }
 
 func (base *ConnectionImplBase) GetInfo(ctx context.Context, infoCodes []adbc.InfoCode) (reader array.RecordReader, err error) {
+	startTime := time.Now()
 	_, span := StartSpan(ctx, "ConnectionImplBase.GetInfo", base)
-	defer EndSpanWithError(span, &err)
+	defer func() {
+		NewEndSpanHelper(span).
+			WithError(err).
+			WithStartTime(startTime).
+			EndSpan()
+	}()
 
 	if len(infoCodes) == 0 {
 		infoCodes = base.DriverInfo.InfoSupportedCodes()

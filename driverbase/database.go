@@ -111,8 +111,10 @@ type DatabaseImplBase struct {
 	Logger      *slog.Logger
 	Tracer      trace.Tracer
 
-	tracerShutdownFunc func(context.Context) error
-	traceParent        string
+	tracerForceFlushFunc func(context.Context) error
+	tracerShutdownFunc   func(context.Context) error
+	tracerProvider       trace.TracerProvider
+	traceParent          string
 }
 
 type TracingOptions struct {
@@ -133,11 +135,12 @@ type TracingOptions struct {
 //     driver, allowing the Arrow allocator and error handler to be reused.
 func NewDatabaseImplBase(ctx context.Context, driver *DriverImplBase, opts TracingOptions) (DatabaseImplBase, error) {
 	database := DatabaseImplBase{
-		Alloc:       driver.Alloc,
-		ErrorHelper: driver.ErrorHelper,
-		DriverInfo:  driver.DriverInfo,
-		Logger:      driver.Logger,
-		Tracer:      nilTracer(),
+		Alloc:          driver.Alloc,
+		ErrorHelper:    driver.ErrorHelper,
+		DriverInfo:     driver.DriverInfo,
+		Logger:         driver.Logger,
+		Tracer:         nilTracer(),
+		tracerProvider: otel.GetTracerProvider(),
 	}
 	err := database.InitTracing(
 		ctx,
@@ -193,10 +196,18 @@ func (base *database) Close(ctx context.Context) error {
 
 func (base *DatabaseImplBase) Close(ctx context.Context) (err error) {
 	if base.Base().tracerShutdownFunc != nil {
-		err = base.Base().tracerShutdownFunc(context.Background())
+		err = base.Base().tracerShutdownFunc(ctx)
 		base.Base().tracerShutdownFunc = nil
+		base.Base().tracerForceFlushFunc = nil
 	}
 	return
+}
+
+func (base *DatabaseImplBase) ForceFlushTracing(ctx context.Context) error {
+	if base.Base().tracerForceFlushFunc == nil {
+		return nil
+	}
+	return base.Base().tracerForceFlushFunc(ctx)
 }
 
 func (base *DatabaseImplBase) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
@@ -232,6 +243,10 @@ func (d *DatabaseImplBase) StartSpan(
 ) (context.Context, trace.Span) {
 	ctx, _ = maybeAddTraceParent(ctx, d, nil)
 	return d.Tracer.Start(ctx, spanName, opts...)
+}
+
+func (d *DatabaseImplBase) GetTracerProvider() trace.TracerProvider {
+	return d.tracerProvider
 }
 
 // database is the implementation of adbc.Database.
@@ -273,6 +288,7 @@ func (base *DatabaseImplBase) InitTracing(
 
 	// Empty exporter
 	if exporterName == "" {
+		base.tracerProvider = otel.GetTracerProvider()
 		base.Tracer = otel.Tracer(fullyQualifiedDriverName)
 		return
 	}
@@ -370,7 +386,9 @@ func newTracer(
 	if err != nil {
 		return
 	}
+	base.Base().tracerForceFlushFunc = tracerProvider.ForceFlush
 	base.Base().tracerShutdownFunc = tracerProvider.Shutdown
+	base.Base().tracerProvider = tracerProvider
 	tracer = tracerProvider.Tracer(
 		fullyQualifiedDriverName,
 		trace.WithInstrumentationVersion(driverVersion),
