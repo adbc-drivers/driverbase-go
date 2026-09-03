@@ -60,6 +60,12 @@ type Statement interface {
 	adbc.GetSetOptionsWithContext
 }
 
+// StatementCanceler is implemented by statements that cancel work beyond the
+// lifetime of the context passed to an execution method.
+type StatementCanceler interface {
+	Cancel(context.Context) error
+}
+
 type statement struct {
 	StatementImpl
 }
