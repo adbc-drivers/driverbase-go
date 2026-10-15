@@ -14,7 +14,7 @@
 
 module github.com/adbc-drivers/driverbase-go/testutil
 
-go 1.26.6
+go 1.26.9
 
 require github.com/apache/arrow-go/v18 v18.8.0
 
