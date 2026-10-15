@@ -14,7 +14,7 @@
 
 module github.com/adbc-drivers/driverbase-go/sqlwrapper
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20260903064016-31a68ee93796

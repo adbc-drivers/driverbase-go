@@ -14,7 +14,7 @@
 
 module github.com/adbc-drivers/driverbase-go/drivertemplate
 
-go 1.26.6
+go 1.26.9
 
 require golang.org/x/tools v0.49.0
 
