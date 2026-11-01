@@ -321,16 +321,17 @@ func (s *StatementImplBase) ExecuteQuery(ctx context.Context) (reader array.Reco
 
 	// Let BaseRecordReader handle parameterized vs non-parameterized logic
 	baseRecordReader := &driverbase.BaseRecordReader{}
-	// Must use a background context or else when the CGO wrapper code
-	// cancels the context, that gets propagated down to the underlying
-	// database/sql driver which in some implementations will close the
-	// connection for some reason.
+	// Must not propagate cancellation of the context or else when the CGO
+	// wrapper code cancels the context, that gets propagated down to the
+	// underlying database/sql driver which in some implementations will
+	// close the connection for some reason.  Keep its values, though
+	// (e.g. for tracing or driver-specific options).
 	// TODO(lidavidm): when given ctx is cancelled, cancel the query, but
 	// not in a way that breaks the connection!
 	options := driverbase.BaseRecordReaderOptions{
 		BatchRowLimit: s.batchSize,
 	}
-	if err := baseRecordReader.Init(context.Background(), memory.DefaultAllocator, s.Conn.Derived.Base().Logger, s.boundStream,
+	if err := baseRecordReader.Init(context.WithoutCancel(ctx), memory.DefaultAllocator, s.Conn.Derived.Base().Logger, s.boundStream,
 		options, impl); err != nil {
 		// Clear boundStream on error to prevent double-release in Close()
 		s.boundStream = nil

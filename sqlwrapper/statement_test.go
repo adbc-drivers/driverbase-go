@@ -41,3 +41,27 @@ func TestExecuteSchemaAdditionalExecParams(t *testing.T) {
 	assert.Equal(t, "param", calls[0].args[0].Name)
 	assert.Equal(t, "value", calls[0].args[0].Value)
 }
+
+type testContextKey struct{}
+
+func TestExecuteQueryContextValues(t *testing.T) {
+	d := &fakeDriver{}
+	stmt := newFakeStatement(t, d)
+
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), testContextKey{}, "value"))
+	require.NoError(t, stmt.SetSqlQuery(ctx, "SELECT 1"))
+	reader, _, err := stmt.ExecuteQuery(ctx)
+	require.NoError(t, err)
+	defer reader.Release()
+	cancel()
+	for reader.Next() {
+	}
+	require.NoError(t, reader.Err())
+
+	calls := d.Calls()
+	require.Len(t, calls, 1)
+	// The query sees the values of the caller's context (e.g. for tracing),
+	// but not its cancellation.
+	assert.Equal(t, "value", calls[0].ctx.Value(testContextKey{}))
+	assert.NoError(t, calls[0].ctx.Err())
+}
