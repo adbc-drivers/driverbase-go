@@ -266,7 +266,7 @@ func (s *StatementImplBase) ExecuteSchema(ctx context.Context) (schema *arrow.Sc
 	var rows *LoggingRows
 
 	// Can't use prepared statement with modified query, fall back to direct execution
-	rows, err = s.Conn.Conn.QueryContext(ctx, limitQuery)
+	rows, err = s.Conn.Conn.QueryContext(ctx, limitQuery, s.Derived.GetAdditionalExecParams()...)
 	if err != nil {
 		return nil, err
 	}
