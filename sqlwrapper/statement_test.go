@@ -20,6 +20,7 @@ import (
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,4 +41,31 @@ func TestExecuteSchemaAdditionalExecParams(t *testing.T) {
 	require.Len(t, calls[0].args, 1)
 	assert.Equal(t, "param", calls[0].args[0].Name)
 	assert.Equal(t, "value", calls[0].args[0].Value)
+}
+
+type testContextKey struct{}
+
+func TestExecuteQueryContextValues(t *testing.T) {
+	d := &fakeDriver{}
+	stmt := newFakeStatement(t, d)
+
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), testContextKey{}, "value"))
+	require.NoError(t, stmt.SetSqlQuery(ctx, "SELECT 1"))
+	reader, _, err := stmt.ExecuteQuery(ctx)
+	require.NoError(t, err)
+	defer reader.Release()
+	cancel()
+	var values []int64
+	for reader.Next() {
+		values = append(values, reader.RecordBatch().Column(0).(*array.Int64).Int64Values()...)
+	}
+	require.NoError(t, reader.Err())
+	assert.Equal(t, []int64{1}, values)
+
+	calls := d.Calls()
+	require.Len(t, calls, 1)
+	// The query sees the values of the caller's context, but not its
+	// cancellation.
+	assert.Equal(t, "value", calls[0].ctx.Value(testContextKey{}))
+	assert.NoError(t, calls[0].ctx.Err())
 }
