@@ -20,6 +20,7 @@ import (
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,14 +55,17 @@ func TestExecuteQueryContextValues(t *testing.T) {
 	require.NoError(t, err)
 	defer reader.Release()
 	cancel()
+	var values []int64
 	for reader.Next() {
+		values = append(values, reader.RecordBatch().Column(0).(*array.Int64).Int64Values()...)
 	}
 	require.NoError(t, reader.Err())
+	assert.Equal(t, []int64{1}, values)
 
 	calls := d.Calls()
 	require.Len(t, calls, 1)
-	// The query sees the values of the caller's context (e.g. for tracing),
-	// but not its cancellation.
+	// The query sees the values of the caller's context, but not its
+	// cancellation.
 	assert.Equal(t, "value", calls[0].ctx.Value(testContextKey{}))
 	assert.NoError(t, calls[0].ctx.Err())
 }
