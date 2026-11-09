@@ -26,7 +26,9 @@ package driverbase
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -535,4 +537,43 @@ func BuildGetStatisticNamesReader(
 	defer rec.Release()
 
 	return array.NewRecordReader(adbc.GetStatisticNamesSchema, []arrow.RecordBatch{rec})
+}
+
+// SafeParseURL is like [url.Parse] but sanitizes any error so it does not
+// include any part of the URL.
+//
+// See: CWE-209 (https://cwe.mitre.org/data/definitions/209.html).
+func SafeParseURL(rawURL string) (*url.URL, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		// explicitly allow certain errors, but omit errors that would
+		// disclose a full component of the URI or the entire URI
+		if urlErr, ok := err.(*url.Error); ok {
+			e := urlErr.Err.Error()
+			switch {
+			case strings.HasPrefix(e, "invalid URL escape "):
+				e = "invalid URL escape"
+			case strings.HasPrefix(e, "invalid character "):
+				e = "invalid character in host name"
+			case strings.HasPrefix(e, "invalid port "):
+				e = "invalid port"
+			case strings.HasPrefix(e, "invalid host: "):
+				e = "invalid host"
+			case e == "missing protocol scheme",
+				e == "net/url: invalid control character in URL",
+				e == "net/url: invalid userinfo",
+				e == "invalid IP-literal",
+				e == "missing ']' in host",
+				e == "first path segment in URL cannot contain colon":
+				// allow as-is
+			default:
+				// unknown, so use a generic error
+				return nil, errors.New("failed to parse URL")
+			}
+			return nil, fmt.Errorf("failed to parse URL: %s", e)
+		}
+		// unknown, so use a generic error
+		return nil, errors.New("failed to parse URL")
+	}
+	return parsed, nil
 }
