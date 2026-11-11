@@ -17,14 +17,29 @@ package testutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
 
+	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
+
+// RequireADBCStatus fails the test immediately unless err is or wraps an
+// adbc.Error with the expected status code.
+func RequireADBCStatus(t *testing.T, err error, code adbc.Status) {
+	t.Helper()
+	var adbcErr adbc.Error
+	if !errors.As(err, &adbcErr) {
+		t.Fatalf("expected adbc.Error, got %T: %v", err, err)
+	}
+	if adbcErr.Code != code {
+		t.Fatalf("expected ADBC status %s, got %s: %v", code, adbcErr.Code, err)
+	}
+}
 
 // CheckedClose validates that a deferred Close call did not fail.
 // See: https://github.com/stretchr/testify/issues/1067
