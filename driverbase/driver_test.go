@@ -67,10 +67,7 @@ func TestDatabaseTracingOptions(t *testing.T) {
 	_, err := driverbase.NewDatabaseImplBase(ctx, &driverBase, driverbase.TracingOptions{
 		ExporterName: "invalid",
 	})
-	require.Error(t, err)
-	var adbcErr adbc.Error
-	require.ErrorAs(t, err, &adbcErr)
-	require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+	testutil.RequireADBCStatus(t, err, adbc.StatusInvalidArgument)
 
 	traceDir := t.TempDir()
 	databaseBase, err := driverbase.NewDatabaseImplBase(ctx, &driverBase, driverbase.TracingOptions{
