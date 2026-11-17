@@ -1,0 +1,116 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+// #include "utils.h"
+import "C"
+
+import (
+	"bytes"
+	"errors"
+	"testing"
+	"unsafe"
+
+	"github.com/apache/arrow-adbc/go/adbc"
+)
+
+func checkBridge(t *testing.T) {
+	const message = "literal 100% complete: %s %d %!"
+	for _, prefixed := range []bool{false, true} {
+		input := message
+		if prefixed {
+			input = errPrefix + input
+		}
+		for _, kind := range []string{"ordinary", "no-details", "vendor-code", "details"} {
+			t.Run(kind+"/"+input, func(t *testing.T) {
+				var out C.struct_AdbcError
+				defer C.TesterrRelease(&out)
+				if kind != "details" {
+					setErr(&out, "replace this previous error")
+				}
+				expected := errPrefix + message
+				var original error = errors.New(input)
+				status := adbc.StatusUnknown
+				if kind != "ordinary" {
+					typed := adbc.Error{Code: adbc.StatusInvalidData, Msg: input, SqlState: [5]byte{'2', '2', '0', '0', '0'}}
+					if kind == "vendor-code" {
+						out.vendor_code = C.ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA
+						typed.VendorCode = 27
+					}
+					if kind == "details" {
+						// The details branch preserves the supplied text verbatim, including
+						// whether its producer chose to add the driver prefix.
+						expected = input
+						out.vendor_code = C.ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA
+						typed.Details = []adbc.ErrorDetail{&adbc.BinaryErrorDetail{Name: "bytes", Detail: []byte{0, 255, 37}}}
+					}
+					original = typed
+					status = adbc.StatusInvalidData
+				}
+				if got := errToAdbcErr(&out, original); got != status {
+					t.Fatalf("status: %v", got)
+				}
+				if got := C.GoString(out.message); got != expected {
+					t.Fatalf("text: %q, expected %q", got, expected)
+				}
+				if kind != "ordinary" && string(C.GoBytes(unsafe.Pointer(&out.sqlstate[0]), 5)) != "22000" {
+					t.Fatal("lost SQLSTATE")
+				}
+				if kind == "vendor-code" && out.vendor_code != 27 {
+					t.Fatal("lost vendor code")
+				}
+				if kind == "details" {
+					if got := C.TestErrorGetDetailCount(&out); got != 1 {
+						t.Fatalf("detail count: %d", got)
+					}
+					detail := C.TestErrorGetDetail(&out, 0)
+					if C.GoString(detail.key) != "bytes" || !bytes.Equal(C.GoBytes(unsafe.Pointer(detail.value), C.int(detail.value_length)), []byte{0, 255, 37}) {
+						t.Fatal("lost binary detail")
+					}
+					setErr(&out, message)
+					if out.private_data != nil {
+						t.Fatal("old detail owner was not released on replacement")
+					}
+					if C.TestErrorGetDetailCount(&out) != 0 {
+						t.Fatal("old details survived replacement")
+					}
+					if C.GoString(out.message) != errPrefix+message {
+						t.Fatal("replacement text changed")
+					}
+				}
+				C.TesterrRelease(&out)
+				if out.release != nil || out.message != nil || out.private_data != nil {
+					t.Fatal("release did not clear owner")
+				}
+				C.TesterrRelease(&out) // Released errors are harmless to release again.
+			})
+		}
+	}
+	var out C.struct_AdbcError
+	fmtErr(&out, "formatted %s %d", "value", 27)
+	if C.GoString(out.message) != errPrefix+"formatted value 27" {
+		t.Fatal("formatted errors stopped formatting")
+	}
+	C.TesterrRelease(&out)
+	setErr(nil, message)
+	fmtErr(nil, "%s", message)
+	setErrWithDetails(nil, adbc.Error{Msg: message})
+	if got := errToAdbcErr(nil, errors.New(message)); got != adbc.StatusUnknown {
+		t.Fatal("nil output changed status")
+	}
+	if got := errToAdbcErr(nil, nil); got != adbc.StatusOK {
+		t.Fatal("nil error changed status")
+	}
+}
