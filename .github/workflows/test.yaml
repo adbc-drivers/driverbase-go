@@ -70,3 +70,7 @@ jobs:
         working-directory: testutil
         run: |
           go test ./...
+
+      - name: Test generated FFI templates
+        working-directory: ffitemplate
+        run: go test -count=1 ./...
