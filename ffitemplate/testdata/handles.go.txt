@@ -1,0 +1,190 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+// #include "utils.h"
+import "C"
+
+import (
+	"context"
+	"runtime"
+	"runtime/cgo"
+	"sync"
+	"testing"
+
+	"github.com/adbc-drivers/driverbase-go/driverbase"
+	"github.com/apache/arrow-adbc/go/adbc"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+)
+
+type closingDatabase struct {
+	driverbase.Database
+	close func()
+}
+
+func (d *closingDatabase) Close(context.Context) error { d.close(); return nil }
+
+type closingConnection struct {
+	driverbase.Connection
+	close func()
+}
+
+func (c *closingConnection) Close(context.Context) error {
+	c.close()
+	return adbc.Error{Code: adbc.StatusIO}
+}
+
+type closingStatement struct {
+	adbc.StatementWithContext
+	close func()
+}
+
+func (s *closingStatement) Close(context.Context) error {
+	s.close()
+	return adbc.Error{Code: adbc.StatusIO}
+}
+
+type closingReader struct {
+	array.RecordReader
+	close func()
+}
+
+func (r *closingReader) Release() { r.close(); r.RecordReader.Release() }
+
+func assertDeleted(t *testing.T, h cgo.Handle) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Error("registry entry survived release")
+		}
+	}()
+	h.Value()
+}
+
+func checkBridge(t *testing.T) {
+	var err C.struct_AdbcError
+	defer C.TesterrRelease(&err)
+	h := cgo.NewHandle(&cDatabase{})
+	db := C.struct_AdbcDatabase{private_data: createHandle(h)}
+	owner := getFromHandle[cDatabase](db.private_data)
+	calls := 0
+	owner.db = &closingDatabase{close: func() {
+		calls++
+		if db.private_data != nil {
+			t.Error("database owner still public during cleanup")
+		}
+		if code := TestDatabaseRelease(&db, nil); code != C.ADBC_STATUS_INVALID_STATE {
+			t.Errorf("repeat database release: %d", code)
+		}
+	}}
+	runtime.GC()
+	if code := TestDatabaseRelease(&db, &err); code != C.ADBC_STATUS_OK {
+		t.Fatalf("database release: %d", code)
+	}
+	assertDeleted(t, h)
+	if calls != 1 {
+		t.Fatalf("database close calls: %d", calls)
+	}
+
+	h = cgo.NewHandle(&cConn{})
+	conn := C.struct_AdbcConnection{private_data: createHandle(h)}
+	getFromHandle[cConn](conn.private_data).cnxn = &closingConnection{close: func() {
+		if conn.private_data != nil {
+			t.Error("connection owner still public during cleanup")
+		}
+	}}
+	if code := TestConnectionRelease(&conn, &err); code != C.ADBC_STATUS_IO {
+		t.Fatalf("connection error release: %d", code)
+	}
+	assertDeleted(t, h)
+	if code := TestConnectionRelease(&conn, &err); code != C.ADBC_STATUS_INVALID_STATE {
+		t.Fatalf("repeat connection release: %d", code)
+	}
+
+	h = cgo.NewHandle(&cStmt{})
+	stmt := C.struct_AdbcStatement{private_data: createHandle(h)}
+	getFromHandle[cStmt](stmt.private_data).stmt = &closingStatement{close: func() {
+		if stmt.private_data != nil {
+			t.Error("statement owner still public during cleanup")
+		}
+	}}
+	if code := TestStatementRelease(&stmt, &err); code != C.ADBC_STATUS_IO {
+		t.Fatalf("statement error release: %d", code)
+	}
+	assertDeleted(t, h)
+	if code := TestStatementRelease(&stmt, &err); code != C.ADBC_STATUS_INVALID_STATE {
+		t.Fatalf("repeat statement release: %d", code)
+	}
+
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+	builder := array.NewInt64Builder(mem)
+	builder.AppendValues([]int64{101, 202}, nil)
+	values := builder.NewArray()
+	builder.Release()
+	batch := array.NewRecordBatch(arrow.NewSchema([]arrow.Field{{Name: "x", Type: arrow.PrimitiveTypes.Int64}}, nil), []arrow.Array{values}, 2)
+	values.Release()
+	reader, e := array.NewRecordReader(batch.Schema(), []arrow.RecordBatch{batch})
+	if e != nil {
+		t.Fatal(e)
+	}
+	batch.Release()
+	var stream C.struct_ArrowArrayStream
+	released := 0
+	exportRecordReader(&closingReader{RecordReader: reader, close: func() {
+		released++
+		if stream.private_data != nil || stream.release != nil {
+			t.Error("stream owner still public during cleanup")
+		}
+		TestArrayStreamRelease(&stream)
+	}}, &stream)
+	reader.Release() // exportRecordReader retained its own reference.
+	streamHandle := handleFromPtr(stream.private_data)
+	if !reader.Next() {
+		t.Fatal("missing retained batch")
+	}
+	retained := reader.RecordBatch()
+	retained.Retain()
+	TestArrayStreamRelease(&stream)
+	TestArrayStreamRelease(&stream)
+	assertDeleted(t, streamHandle)
+	if released != 1 {
+		t.Fatalf("reader release calls: %d", released)
+	}
+	if got := retained.Column(0).(*array.Int64).Value(1); got != 202 {
+		t.Fatalf("retained batch value: %d", got)
+	}
+	retained.Release()
+
+	var workers sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		workers.Go(func() {
+			for i := 0; i < 64; i++ {
+				value := new(int)
+				ptr := createHandle(cgo.NewHandle(value))
+				if getFromHandle[int](ptr) != value {
+					t.Error("independent handle alias")
+				}
+				// Same ownership helper used by all four release paths.
+				if takeHandle(ptr) != value {
+					t.Error("lost owner")
+				}
+			}
+		})
+	}
+	workers.Wait()
+}
