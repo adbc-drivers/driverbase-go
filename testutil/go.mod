@@ -18,7 +18,7 @@ go 1.26.9
 
 require (
 	github.com/apache/arrow-adbc/go/adbc v1.13.0
-	github.com/apache/arrow-go/v18 v18.8.0
+	github.com/apache/arrow-go/v18 v18.9.0
 )
 
 require (
