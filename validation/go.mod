@@ -20,7 +20,7 @@ require (
 	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20261114105037-a29c17f09a66
 	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-20261114105037-a29c17f09a66
 	github.com/apache/arrow-adbc/go/adbc v1.13.0
-	github.com/apache/arrow-go/v18 v18.8.0
+	github.com/apache/arrow-go/v18 v18.9.0
 	github.com/stretchr/testify v1.12.1
 )
 
